@@ -442,17 +442,93 @@ def display_schedule_builder():
         schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
         schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
         
-        # Create Gantt chart data
-        gantt_data = []
-        for i, row in schedule_df.iterrows():
-            gantt_data.append(dict(
-                Task=row['course_title'], 
-                Start=row['start_date'], 
-                Finish=row['end_date'], 
-                Resource=f"Class {row['id']}"
-            ))
+        # Sort by course title first, then by start date
+        schedule_df = schedule_df.sort_values(['course_title', 'start_date'])
         
-        fig = ff.create_gantt(gantt_data, index_col='Resource', show_colorbar=True)
+        # Create a custom Gantt chart using plotly
+        fig = go.Figure()
+
+        # Add this after creating the fig object
+        fig.update_layout(
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=12,
+                font_family="Arial"
+            ),
+            # Add date range slider
+            xaxis=dict(
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(count=1, label="YTD", step="year", stepmode="todate"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                ),
+                rangeslider=dict(visible=True),
+                type="date"
+            )
+        )
+        
+        # Get unique courses for coloring and positioning
+        unique_courses = schedule_df['course_title'].unique()
+        colors = px.colors.qualitative.Plotly[:len(unique_courses)]
+        color_map = {course: color for course, color in zip(unique_courses, colors)}
+        
+        # Track y positions for each course to ensure proper grouping
+        current_y = 0
+        y_positions = {}
+        for course in unique_courses:
+            y_positions[course] = current_y
+            current_y += 1
+        
+        # Add bars for each class
+        for i, row in schedule_df.iterrows():
+            course = row['course_title']
+            class_id = row['id']
+            y_pos = y_positions[course]
+            
+            # Add bar for class
+            fig.add_trace(go.Bar(
+                x=[(row['end_date'] - row['start_date']).days],  # Bar width = duration
+                y=[course],
+                orientation='h',
+                marker=dict(color=color_map[course]),
+                name=course,
+                hoverinfo='text',
+                text=f"Class {class_id}: {course}<br>Start: {row['start_date'].strftime('%Y-%m-%d')}<br>End: {row['end_date'].strftime('%Y-%m-%d')}<br>Size: {row['size']}",
+                showlegend=False,
+                base=row['start_date'],  # Start position
+            ))
+            
+            # Add text label for class ID
+            fig.add_annotation(
+                x=row['start_date'] + (row['end_date'] - row['start_date'])/2,
+                y=y_pos,
+                text=f"Class {class_id}",
+                showarrow=False,
+                font=dict(color="black", size=10)
+            )
+        
+        # Configure layout
+        fig.update_layout(
+            title="Course Schedule",
+            xaxis=dict(
+                title="Date",
+                type='date',
+                tickformat='%Y-%m-%d'
+            ),
+            yaxis=dict(
+                title="Course",
+                categoryorder='array',
+                categoryarray=list(unique_courses)
+            ),
+            barmode='overlay',
+            height=max(400, len(unique_courses) * 70),
+            margin=dict(l=150, r=50, t=50, b=50)
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
         
         # Schedule table view
@@ -466,7 +542,7 @@ def display_schedule_builder():
         if st.button("Remove Class"):
             st.session_state.future_schedule = [c for c in st.session_state.future_schedule if c['id'] != class_to_remove]
             st.success(f"Removed class with ID {class_to_remove}")
-            st.rerun()
+            st.experimental_rerun()
     else:
         st.info("No classes scheduled yet. Add classes using the form above.")
     
