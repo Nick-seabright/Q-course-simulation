@@ -466,7 +466,7 @@ def display_schedule_builder():
         if st.button("Remove Class"):
             st.session_state.future_schedule = [c for c in st.session_state.future_schedule if c['id'] != class_to_remove]
             st.success(f"Removed class with ID {class_to_remove}")
-            st.experimental_rerun()
+            st.rerun()
     else:
         st.info("No classes scheduled yet. Add classes using the form above.")
     
@@ -506,7 +506,7 @@ def display_schedule_builder():
                     st.session_state.future_schedule = loaded_schedule
                 
                 st.success("Schedule loaded successfully!")
-                st.experimental_rerun()
+                st.rerun()
             except Exception as e:
                 st.error(f"Error loading schedule: {e}")
 
