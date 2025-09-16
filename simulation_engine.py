@@ -118,24 +118,28 @@ class Class:
                     return False
         
         # Check officer/enlisted ratio if specified
-        if self.officer_enlisted_ratio:
-            officer_ratio, enlisted_ratio = map(int, self.officer_enlisted_ratio.split(':'))
-            
-            # Count current officers and enlisted
-            officer_count = sum(1 for s in self.students if s.personnel_type == 'Officer')
-            enlisted_count = sum(1 for s in self.students if s.personnel_type == 'Enlisted')
-            
-            # Calculate target ratio
-            total = officer_count + enlisted_count
-            if total > 0:
-                current_ratio = officer_count / enlisted_count if enlisted_count > 0 else float('inf')
-                target_ratio = officer_ratio / enlisted_ratio
+        if self.officer_enlisted_ratio:  # Only check if a ratio is set
+            try:
+                officer_ratio, enlisted_ratio = map(int, self.officer_enlisted_ratio.split(':'))
                 
-                # If adding this student would worsen the ratio
-                if student.personnel_type == 'Officer' and current_ratio > target_ratio:
-                    return False
-                if student.personnel_type == 'Enlisted' and current_ratio < target_ratio:
-                    return False
+                # Count current officers and enlisted
+                officer_count = sum(1 for s in self.students if s.personnel_type == 'Officer')
+                enlisted_count = sum(1 for s in self.students if s.personnel_type == 'Enlisted')
+                
+                # Calculate target ratio
+                total = officer_count + enlisted_count
+                if total > 0:
+                    current_ratio = officer_count / enlisted_count if enlisted_count > 0 else float('inf')
+                    target_ratio = officer_ratio / enlisted_ratio
+                    
+                    # If adding this student would worsen the ratio
+                    if student.personnel_type == 'Officer' and current_ratio > target_ratio:
+                        return False
+                    if student.personnel_type == 'Enlisted' and current_ratio < target_ratio:
+                        return False
+            except (ValueError, ZeroDivisionError, AttributeError):
+                # If there's any error parsing the ratio, just ignore the ratio check
+                pass
         
         return True
     
@@ -195,7 +199,7 @@ def run_simulation(inputs):
             end_date=pd.to_datetime(class_info['end_date']),
             max_capacity=class_info['size'],
             reserved_seats=reserved_seats,
-            officer_enlisted_ratio=officer_enlisted_ratio
+            officer_enlisted_ratio=config.get('officer_enlisted_ratio')  # This may be None
         )
         
         classes.append(class_obj)

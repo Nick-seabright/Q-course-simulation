@@ -24,6 +24,13 @@ def main():
         st.session_state.data = None
     if 'course_configs' not in st.session_state:
         st.session_state.course_configs = {}
+    else:
+        # Apply backward compatibility for existing configurations
+        for course, config in st.session_state.course_configs.items():
+            # Convert empty string or invalid ratio to None for "No Ratio"
+            if 'officer_enlisted_ratio' in config:
+                if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
+                    config['officer_enlisted_ratio'] = None
     if 'future_schedule' not in st.session_state:
         st.session_state.future_schedule = []
     if 'simulation_results' not in st.session_state:
@@ -322,16 +329,32 @@ def display_config_page():
     
     # Officer to Enlisted ratio
     st.subheader("Officer to Enlisted Ratio")
-    ratio_options = ["1:1", "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "Custom"]
+    ratio_options = ["No Ratio", "1:1", "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "Custom"]
+    
+    # Get current ratio setting
+    current_ratio = config['officer_enlisted_ratio']
+    current_index = 0  # Default to "No Ratio"
+    
+    # Determine which option to select by default
+    if current_ratio:  # If not None or empty
+        if current_ratio in ratio_options:
+            current_index = ratio_options.index(current_ratio)
+        else:
+            current_index = ratio_options.index("Custom")
+            
     selected_ratio = st.selectbox(
         "Select ratio", 
         ratio_options,
-        index=ratio_options.index(config['officer_enlisted_ratio']) if config['officer_enlisted_ratio'] in ratio_options else ratio_options.index("Custom")
+        index=current_index
     )
     
     if selected_ratio == "Custom":
-        custom_ratio = st.text_input("Enter custom ratio (format: 1:4)", value=config['officer_enlisted_ratio'])
+        custom_ratio = st.text_input("Enter custom ratio (format: 1:4)", 
+                                    value=current_ratio if current_ratio and current_ratio not in ratio_options else "1:4")
         config['officer_enlisted_ratio'] = custom_ratio
+    elif selected_ratio == "No Ratio":
+        config['officer_enlisted_ratio'] = None  # Store None for no ratio
+        st.info("No officer-to-enlisted ratio will be enforced for this course.")
     else:
         config['officer_enlisted_ratio'] = selected_ratio
     
@@ -467,7 +490,21 @@ def display_schedule_builder():
         if uploaded_schedule is not None:
             try:
                 loaded_schedule = json.load(uploaded_schedule)
-                st.session_state.future_schedule = loaded_schedule
+                
+                # Load and process course configurations if included
+                if isinstance(loaded_schedule, dict) and 'schedule' in loaded_schedule and 'configurations' in loaded_schedule:
+                    # Apply backward compatibility for loaded configurations
+                    for course, config in loaded_schedule['configurations'].items():
+                        if 'officer_enlisted_ratio' in config:
+                            if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
+                                config['officer_enlisted_ratio'] = None
+                    
+                    st.session_state.course_configs.update(loaded_schedule['configurations'])
+                    st.session_state.future_schedule = loaded_schedule['schedule']
+                else:
+                    # Assume it's just a schedule without configurations
+                    st.session_state.future_schedule = loaded_schedule
+                
                 st.success("Schedule loaded successfully!")
                 st.experimental_rerun()
             except Exception as e:
