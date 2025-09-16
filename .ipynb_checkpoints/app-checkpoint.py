@@ -540,118 +540,135 @@ def display_schedule_builder():
     if st.session_state.future_schedule:
         schedule_df = pd.DataFrame(st.session_state.future_schedule)
         
+        # Display raw data for debugging
+        with st.expander("Debug: Schedule Data"):
+            st.write("Raw Schedule Data:")
+            st.write(schedule_df)
+        
         # Convert date strings to datetime for plotting
-        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
-        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
-        
-        # Filter options
-        with st.expander("Chart Options"):
-            # Filter by course
-            unique_courses = schedule_df['course_title'].unique()
-            selected_courses = st.multiselect(
-                "Show only these courses (leave empty to show all):",
-                options=unique_courses,
-                default=[]
-            )
+        try:
+            schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+            schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
             
-            # Date range filter
-            col1, col2 = st.columns(2)
-            with col1:
-                min_date = schedule_df['start_date'].min().date()
-                start_date_filter = st.date_input("From date", min_date, key="gantt_start_filter")
-            with col2:
-                max_date = schedule_df['end_date'].max().date()
-                end_date_filter = st.date_input("To date", max_date, key="gantt_end_filter")
-        
-        # Apply filters
-        filtered_df = schedule_df.copy()
-        
-        if selected_courses:
-            filtered_df = filtered_df[filtered_df['course_title'].isin(selected_courses)]
-        
-        filtered_df = filtered_df[
-            (filtered_df['start_date'] >= pd.Timestamp(start_date_filter)) &
-            (filtered_df['end_date'] <= pd.Timestamp(end_date_filter))
-        ]
-        
-        # Sort by course title first, then by start date
-        filtered_df = filtered_df.sort_values(['course_title', 'start_date'])
-        
-        # Create a custom Gantt chart using plotly
-        fig = go.Figure()
-        
-        # Get unique courses for coloring and positioning
-        unique_courses = filtered_df['course_title'].unique()
-        colors = px.colors.qualitative.Plotly[:len(unique_courses)]
-        color_map = {course: color for course, color in zip(unique_courses, colors)}
-        
-        # Track y positions for each course to ensure proper grouping
-        y_positions = {}
-        for i, course in enumerate(unique_courses):
-            y_positions[course] = i
-        
-        # Add bars for each class
-        for i, row in filtered_df.iterrows():
-            course = row['course_title']
-            class_id = row['id']
-            y_pos = y_positions[course]
+            # Filter options
+            with st.expander("Chart Options"):
+                # Filter by course
+                unique_courses = schedule_df['course_title'].unique()
+                st.write(f"Available courses: {len(unique_courses)}")
+                
+                selected_courses = st.multiselect(
+                    "Show only these courses (leave empty to show all):",
+                    options=unique_courses,
+                    default=[]
+                )
+                
+                # Date range filter
+                col1, col2 = st.columns(2)
+                with col1:
+                    min_date = schedule_df['start_date'].min().date()
+                    start_date_filter = st.date_input("From date", min_date, key="gantt_start_filter")
+                with col2:
+                    max_date = schedule_df['end_date'].max().date()
+                    end_date_filter = st.date_input("To date", max_date, key="gantt_end_filter")
             
-            # Add bar for class
-            fig.add_trace(go.Bar(
-                x=[(row['end_date'] - row['start_date']).days],  # Bar width = duration
-                y=[course],
-                orientation='h',
-                marker=dict(color=color_map[course]),
-                name=course,
-                hoverinfo='text',
-                text=f"Class {class_id}: {course}<br>Start: {row['start_date'].strftime('%Y-%m-%d')}<br>End: {row['end_date'].strftime('%Y-%m-%d')}<br>Size: {row['size']}",
-                showlegend=False,
-                base=row['start_date'],  # Start position
-            ))
+            # Apply filters
+            filtered_df = schedule_df.copy()
             
-            # Add text label for class ID
-            fig.add_annotation(
-                x=row['start_date'] + (row['end_date'] - row['start_date'])/2,
-                y=course,
-                text=f"Class {class_id}",
-                showarrow=False,
-                font=dict(color="black", size=10)
-            )
-        
-        # Configure layout
-        fig.update_layout(
-            title="Course Schedule",
-            xaxis=dict(
-                title="Date",
-                type='date',
-                tickformat='%Y-%m-%d',
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1m", step="month", stepmode="backward"),
-                        dict(count=6, label="6m", step="month", stepmode="backward"),
-                        dict(count=1, label="YTD", step="year", stepmode="todate"),
-                        dict(count=1, label="1y", step="year", stepmode="backward"),
-                        dict(step="all")
-                    ])
-                ),
-                rangeslider=dict(visible=True)
-            ),
-            yaxis=dict(
-                title="Course",
-                categoryorder='array',
-                categoryarray=list(unique_courses)
-            ),
-            hoverlabel=dict(
-                bgcolor="white",
-                font_size=12,
-                font_family="Arial"
-            ),
-            barmode='overlay',
-            height=max(400, len(unique_courses) * 70),
-            margin=dict(l=150, r=50, t=50, b=50)
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+            if selected_courses:
+                filtered_df = filtered_df[filtered_df['course_title'].isin(selected_courses)]
+            
+            filtered_df = filtered_df[
+                (filtered_df['start_date'] >= pd.Timestamp(start_date_filter)) &
+                (filtered_df['end_date'] <= pd.Timestamp(end_date_filter))
+            ]
+            
+            # Debug information
+            with st.expander("Debug: Filtered Data"):
+                st.write(f"Filtered schedule data (rows: {len(filtered_df)})")
+                st.write(filtered_df)
+            
+            # Check if we have data to display
+            if filtered_df.empty:
+                st.warning("No classes match the selected filters. Try adjusting the date range or course selection.")
+            else:
+                # Sort by course title first, then by start date
+                filtered_df = filtered_df.sort_values(['course_title', 'start_date'])
+                
+                # Create a custom Gantt chart using plotly
+                fig = go.Figure()
+                
+                # Get unique courses for coloring and positioning
+                unique_courses = filtered_df['course_title'].unique()
+                st.write(f"Courses to display: {len(unique_courses)}")
+                
+                # Use a different color palette if there are many courses
+                if len(unique_courses) <= 10:
+                    colors = px.colors.qualitative.Plotly[:len(unique_courses)]
+                else:
+                    colors = px.colors.qualitative.Alphabet[:len(unique_courses)]
+                    
+                color_map = {course: color for course, color in zip(unique_courses, colors)}
+                
+                # Add bars for each class
+                for i, row in filtered_df.iterrows():
+                    course = row['course_title']
+                    class_id = row['id']
+                    
+                    # Calculate date range for the bar
+                    start_date = row['start_date']
+                    end_date = row['end_date']
+                    duration_days = (end_date - start_date).days
+                    
+                    # Debug info
+                    st.write(f"Adding class {class_id}: {course} - {start_date} to {end_date} ({duration_days} days)")
+                    
+                    # Add bar for class using scatter with lines
+                    fig.add_trace(go.Scatter(
+                        x=[start_date, end_date],
+                        y=[course, course],
+                        mode='lines',
+                        line=dict(color=color_map[course], width=20),
+                        name=f"{course} (Class {class_id})",
+                        text=f"Class {class_id}: {course}<br>Start: {start_date.strftime('%Y-%m-%d')}<br>End: {end_date.strftime('%Y-%m-%d')}<br>Size: {row['size']}",
+                        hoverinfo='text'
+                    ))
+                    
+                    # Add text label for class ID
+                    fig.add_annotation(
+                        x=start_date + pd.Timedelta(days=duration_days/2),
+                        y=course,
+                        text=f"Class {class_id}",
+                        showarrow=False,
+                        font=dict(color="black", size=10)
+                    )
+                
+                # Configure layout
+                fig.update_layout(
+                    title="Course Schedule",
+                    xaxis=dict(
+                        title="Date",
+                        type='date',
+                        tickformat='%Y-%m-%d',
+                    ),
+                    yaxis=dict(
+                        title="Course",
+                        categoryorder='array',
+                        categoryarray=list(unique_courses)
+                    ),
+                    hoverlabel=dict(
+                        bgcolor="white",
+                        font_size=12,
+                        font_family="Arial"
+                    ),
+                    height=max(400, len(unique_courses) * 70),
+                    margin=dict(l=150, r=50, t=50, b=50)
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+        except Exception as e:
+            st.error(f"Error generating Gantt chart: {e}")
+            st.write("Please check your schedule data format.")
         
         # Schedule table view
         st.dataframe(schedule_df[['id', 'course_title', 'start_date', 'end_date', 'size']])
