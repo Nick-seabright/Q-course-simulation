@@ -1,6 +1,33 @@
+# utils.py
 import pandas as pd
 import numpy as np
 import datetime
+from collections import defaultdict
+
+def ensure_config_compatibility(config):
+    """
+    Ensure backward compatibility with older configuration formats
+    
+    Args:
+        config (dict): Course configuration dictionary
+        
+    Returns:
+        dict: Updated configuration with compatible format
+    """
+    # Handle officer-enlisted ratio compatibility
+    if 'officer_enlisted_ratio' in config:
+        if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
+            config['officer_enlisted_ratio'] = None
+    
+    # Handle prerequisites compatibility (if you've updated that structure)
+    if 'prerequisites' in config and isinstance(config['prerequisites'], list):
+        config['prerequisites'] = {
+            'type': 'AND',
+            'courses': config['prerequisites']
+        }
+        config['or_prerequisites'] = []
+    
+    return config
 
 def calculate_fiscal_year(date):
     """
@@ -31,6 +58,9 @@ def parse_ratio(ratio_str):
     Returns:
         tuple: Tuple of (numerator, denominator)
     """
+    if not ratio_str:  # Handle None or empty string
+        return None
+        
     try:
         numerator, denominator = ratio_str.split(':')
         return (int(numerator), int(denominator))
@@ -199,10 +229,10 @@ def validate_schedule(schedule, course_configs):
         is_related = False
         
         # Check if one is a prerequisite of the other
-        if course1 in course_configs and course2 in course_configs.get(course1, {}).get('prerequisites', []):
+        if course1 in course_configs and course2 in get_prerequisites(course_configs, course1):
             is_related = True
         
-        if course2 in course_configs and course1 in course_configs.get(course2, {}).get('prerequisites', []):
+        if course2 in course_configs and course1 in get_prerequisites(course_configs, course2):
             is_related = True
         
         if is_related:
@@ -252,3 +282,34 @@ def validate_schedule(schedule, course_configs):
         'issues': issues,
         'warnings': warnings
     }
+
+def get_prerequisites(course_configs, course):
+    """
+    Get all prerequisites for a course (including from OR groups)
+    
+    Args:
+        course_configs (dict): Dictionary of course configurations
+        course (str): Course to get prerequisites for
+        
+    Returns:
+        list: List of prerequisite courses
+    """
+    if course not in course_configs:
+        return []
+    
+    config = course_configs[course]
+    all_prereqs = []
+    
+    # Get standard prerequisites
+    if 'prerequisites' in config:
+        if isinstance(config['prerequisites'], list):
+            all_prereqs.extend(config['prerequisites'])
+        elif isinstance(config['prerequisites'], dict):
+            all_prereqs.extend(config['prerequisites'].get('courses', []))
+    
+    # Get OR prerequisites
+    if 'or_prerequisites' in config:
+        for group in config['or_prerequisites']:
+            all_prereqs.extend(group)
+    
+    return list(set(all_prereqs))  # Remove duplicates

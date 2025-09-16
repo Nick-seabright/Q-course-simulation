@@ -2,17 +2,21 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime
-import plotly.figure_factory as ff
+import plotly.graph_objects as go
 import plotly.express as px
+import json
+import copy
+from collections import defaultdict
+
 from data_processor import process_data, analyze_historical_data
 from simulation_engine import run_simulation
 from optimization import optimize_schedule
-import json
+from utils import ensure_config_compatibility
 
-st.set_page_config(page_title="Q-Course Training Schedule Optimizer", layout="wide")
+st.set_page_config(page_title="Military Training Schedule Optimizer", layout="wide")
 
 def main():
-    st.title("Q-Course Training Schedule Optimization System")
+    st.title("Military Training Schedule Optimization System")
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
@@ -22,6 +26,10 @@ def main():
     # Initialize session state for data persistence between pages
     if 'data' not in st.session_state:
         st.session_state.data = None
+    if 'processed_data' not in st.session_state:
+        st.session_state.processed_data = None
+    if 'historical_analysis' not in st.session_state:
+        st.session_state.historical_analysis = None
     if 'course_configs' not in st.session_state:
         st.session_state.course_configs = {}
     else:
@@ -31,6 +39,15 @@ def main():
             if 'officer_enlisted_ratio' in config:
                 if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
                     config['officer_enlisted_ratio'] = None
+                    
+            # Handle prerequisites compatibility
+            if 'prerequisites' in config and isinstance(config['prerequisites'], list):
+                config['prerequisites'] = {
+                    'type': 'AND',
+                    'courses': config['prerequisites']
+                }
+                config['or_prerequisites'] = []
+    
     if 'future_schedule' not in st.session_state:
         st.session_state.future_schedule = []
     if 'simulation_results' not in st.session_state:
@@ -118,7 +135,7 @@ def display_config_page():
                 'ADE': 0,
                 'NG': 0
             },
-            'officer_enlisted_ratio': '1:4'
+            'officer_enlisted_ratio': None  # Default to No Ratio
         }
     
     config = st.session_state.course_configs[selected_course]
@@ -141,7 +158,7 @@ def display_config_page():
     
     # Configure prerequisites
     st.subheader("Prerequisites")
-
+    
     with st.expander("How Prerequisites Work"):
         st.markdown("""
         ### Prerequisite Types:
@@ -329,12 +346,24 @@ def display_config_page():
     
     # Officer to Enlisted ratio
     st.subheader("Officer to Enlisted Ratio")
-    ratio_options = ["No Ratio", "1:1", "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "Custom"]
     
+    with st.expander("About Officer-Enlisted Ratio"):
+        st.markdown("""
+        **No Ratio**: The class will accept any mix of officers and enlisted personnel up to capacity.
+        
+        **1:4 Ratio**: For every 1 officer, the class should have 4 enlisted personnel. The system will try to maintain this ratio when assigning students.
+        
+        **Custom Ratio**: Enter your own ratio in the format "1:5" (1 officer to 5 enlisted).
+        
+        Note: Ratios are maintained as students are added to classes. If a student would cause the ratio to deviate too far from the target, they may not be accepted into the class.
+        """)
+    
+    ratio_options = ["No Ratio", "1:1", "1:2", "1:3", "1:4", "1:5", "1:8", "1:10", "Custom"]
+
     # Get current ratio setting
     current_ratio = config['officer_enlisted_ratio']
     current_index = 0  # Default to "No Ratio"
-    
+
     # Determine which option to select by default
     if current_ratio:  # If not None or empty
         if current_ratio in ratio_options:
@@ -347,7 +376,7 @@ def display_config_page():
         ratio_options,
         index=current_index
     )
-    
+
     if selected_ratio == "Custom":
         custom_ratio = st.text_input("Enter custom ratio (format: 1:4)", 
                                     value=current_ratio if current_ratio and current_ratio not in ratio_options else "1:4")
@@ -406,31 +435,104 @@ def display_schedule_builder():
     
     course_title = st.selectbox("Select Course", list(st.session_state.course_configs.keys()))
     
+    # Show historical duration for selected course
+    if course_title in st.session_state.historical_analysis:
+        hist_data = st.session_state.historical_analysis[course_title]
+        avg_duration = hist_data.get('avg_duration', 14)  # Default to 14 days if not available
+        st.info(f"Historical average duration for {course_title}: {avg_duration:.1f} days")
+    
+    # Quick date setter buttons
+    with st.expander("Quick Date Setter"):
+        col1, col2, col3, col4 = st.columns(4)
+        
+        # Get historical duration for this course if available
+        default_duration = 14  # Default if no historical data
+        if course_title in st.session_state.historical_analysis:
+            hist_duration = st.session_state.historical_analysis[course_title].get('avg_duration')
+            if hist_duration:
+                default_duration = int(hist_duration)
+        
+        with col1:
+            if st.button("1 Week"):
+                st.session_state.temp_start = start_date
+                st.session_state.temp_end = start_date + datetime.timedelta(days=7)
+                st.experimental_rerun()
+        
+        with col2:
+            if st.button("2 Weeks"):
+                st.session_state.temp_start = start_date
+                st.session_state.temp_end = start_date + datetime.timedelta(days=14)
+                st.experimental_rerun()
+        
+        with col3:
+            if st.button("1 Month"):
+                st.session_state.temp_start = start_date
+                st.session_state.temp_end = start_date + datetime.timedelta(days=30)
+                st.experimental_rerun()
+        
+        with col4:
+            if st.button(f"Historical ({default_duration} days)"):
+                st.session_state.temp_start = start_date
+                st.session_state.temp_end = start_date + datetime.timedelta(days=default_duration)
+                st.experimental_rerun()
+    
+    # Date and size inputs
     col1, col2, col3 = st.columns(3)
     with col1:
-        class_start_date = st.date_input("Class Start Date", value=start_date)
+        default_start = st.session_state.temp_start if 'temp_start' in st.session_state else start_date
+        class_start_date = st.date_input("Class Start Date", value=default_start)
+        # Clear the temporary value after using it
+        if 'temp_start' in st.session_state:
+            del st.session_state.temp_start
+            
     with col2:
-        duration = st.number_input("Duration (days)", min_value=1, value=30)
+        # Set default end date based on historical duration if available
+        default_duration = 14  # Default duration in days
+        if course_title in st.session_state.historical_analysis:
+            hist_duration = st.session_state.historical_analysis[course_title].get('avg_duration')
+            if hist_duration:
+                default_duration = int(hist_duration)
+        
+        default_end = st.session_state.temp_end if 'temp_end' in st.session_state else (class_start_date + datetime.timedelta(days=default_duration))
+        class_end_date = st.date_input("Class End Date", value=default_end)
+        # Clear the temporary value after using it
+        if 'temp_end' in st.session_state:
+            del st.session_state.temp_end
+            
     with col3:
         class_size = st.number_input("Class Size", 
-                                  min_value=1, 
-                                  max_value=int(st.session_state.course_configs[course_title]['max_capacity']),
-                                  value=int(st.session_state.course_configs[course_title]['max_capacity']))
+                                     min_value=1, 
+                                     max_value=st.session_state.course_configs[course_title]['max_capacity'],
+                                     value=st.session_state.course_configs[course_title]['max_capacity'])
     
-    class_end_date = class_start_date + datetime.timedelta(days=duration)
-    
-    # Add class button
-    if st.button("Add Class to Schedule"):
-        new_class = {
-            "course_title": course_title,
-            "start_date": class_start_date.strftime("%Y-%m-%d"),
-            "end_date": class_end_date.strftime("%Y-%m-%d"),
-            "size": class_size,
-            "id": len(st.session_state.future_schedule) + 1
-        }
+    # Show duration between selected dates
+    if class_start_date and class_end_date:
+        duration_days = (class_end_date - class_start_date).days
+        st.info(f"Selected duration: {duration_days} days")
         
-        st.session_state.future_schedule.append(new_class)
-        st.success(f"Added {course_title} starting on {class_start_date}")
+        # Add warning if the duration is very different from historical average
+        if course_title in st.session_state.historical_analysis:
+            hist_duration = st.session_state.historical_analysis[course_title].get('avg_duration')
+            if hist_duration:
+                if duration_days < hist_duration * 0.7 or duration_days > hist_duration * 1.3:
+                    st.warning(f"The selected duration ({duration_days} days) is significantly different from the historical average ({hist_duration:.1f} days).")
+    
+    # Validate dates
+    if class_start_date >= class_end_date:
+        st.error("Class end date must be after start date.")
+    else:
+        # Add class button
+        if st.button("Add Class to Schedule"):
+            new_class = {
+                "course_title": course_title,
+                "start_date": class_start_date.strftime("%Y-%m-%d"),
+                "end_date": class_end_date.strftime("%Y-%m-%d"),
+                "size": int(class_size),  # Ensure it's stored as int
+                "id": len(st.session_state.future_schedule) + 1
+            }
+            
+            st.session_state.future_schedule.append(new_class)
+            st.success(f"Added {course_title} from {class_start_date} to {class_end_date}")
     
     # Display current schedule
     st.subheader("Current Schedule")
@@ -442,49 +544,54 @@ def display_schedule_builder():
         schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
         schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
         
+        # Filter options
+        with st.expander("Chart Options"):
+            # Filter by course
+            unique_courses = schedule_df['course_title'].unique()
+            selected_courses = st.multiselect(
+                "Show only these courses (leave empty to show all):",
+                options=unique_courses,
+                default=[]
+            )
+            
+            # Date range filter
+            col1, col2 = st.columns(2)
+            with col1:
+                min_date = schedule_df['start_date'].min().date()
+                start_date_filter = st.date_input("From date", min_date, key="gantt_start_filter")
+            with col2:
+                max_date = schedule_df['end_date'].max().date()
+                end_date_filter = st.date_input("To date", max_date, key="gantt_end_filter")
+        
+        # Apply filters
+        filtered_df = schedule_df.copy()
+        
+        if selected_courses:
+            filtered_df = filtered_df[filtered_df['course_title'].isin(selected_courses)]
+        
+        filtered_df = filtered_df[
+            (filtered_df['start_date'] >= pd.Timestamp(start_date_filter)) &
+            (filtered_df['end_date'] <= pd.Timestamp(end_date_filter))
+        ]
+        
         # Sort by course title first, then by start date
-        schedule_df = schedule_df.sort_values(['course_title', 'start_date'])
+        filtered_df = filtered_df.sort_values(['course_title', 'start_date'])
         
         # Create a custom Gantt chart using plotly
         fig = go.Figure()
-
-        # Add this after creating the fig object
-        fig.update_layout(
-            hoverlabel=dict(
-                bgcolor="white",
-                font_size=12,
-                font_family="Arial"
-            ),
-            # Add date range slider
-            xaxis=dict(
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1m", step="month", stepmode="backward"),
-                        dict(count=6, label="6m", step="month", stepmode="backward"),
-                        dict(count=1, label="YTD", step="year", stepmode="todate"),
-                        dict(count=1, label="1y", step="year", stepmode="backward"),
-                        dict(step="all")
-                    ])
-                ),
-                rangeslider=dict(visible=True),
-                type="date"
-            )
-        )
         
         # Get unique courses for coloring and positioning
-        unique_courses = schedule_df['course_title'].unique()
+        unique_courses = filtered_df['course_title'].unique()
         colors = px.colors.qualitative.Plotly[:len(unique_courses)]
         color_map = {course: color for course, color in zip(unique_courses, colors)}
         
         # Track y positions for each course to ensure proper grouping
-        current_y = 0
         y_positions = {}
-        for course in unique_courses:
-            y_positions[course] = current_y
-            current_y += 1
+        for i, course in enumerate(unique_courses):
+            y_positions[course] = i
         
         # Add bars for each class
-        for i, row in schedule_df.iterrows():
+        for i, row in filtered_df.iterrows():
             course = row['course_title']
             class_id = row['id']
             y_pos = y_positions[course]
@@ -505,7 +612,7 @@ def display_schedule_builder():
             # Add text label for class ID
             fig.add_annotation(
                 x=row['start_date'] + (row['end_date'] - row['start_date'])/2,
-                y=y_pos,
+                y=course,
                 text=f"Class {class_id}",
                 showarrow=False,
                 font=dict(color="black", size=10)
@@ -517,12 +624,27 @@ def display_schedule_builder():
             xaxis=dict(
                 title="Date",
                 type='date',
-                tickformat='%Y-%m-%d'
+                tickformat='%Y-%m-%d',
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1m", step="month", stepmode="backward"),
+                        dict(count=6, label="6m", step="month", stepmode="backward"),
+                        dict(count=1, label="YTD", step="year", stepmode="todate"),
+                        dict(count=1, label="1y", step="year", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                ),
+                rangeslider=dict(visible=True)
             ),
             yaxis=dict(
                 title="Course",
                 categoryorder='array',
                 categoryarray=list(unique_courses)
+            ),
+            hoverlabel=dict(
+                bgcolor="white",
+                font_size=12,
+                font_family="Arial"
             ),
             barmode='overlay',
             height=max(400, len(unique_courses) * 70),
@@ -553,7 +675,12 @@ def display_schedule_builder():
     
     with col1:
         if st.button("Save Schedule"):
-            schedule_json = json.dumps(st.session_state.future_schedule)
+            # Create a complete package with schedule and configurations
+            save_data = {
+                'schedule': st.session_state.future_schedule,
+                'configurations': st.session_state.course_configs
+            }
+            schedule_json = json.dumps(save_data)
             st.download_button(
                 label="Download Schedule JSON",
                 data=schedule_json,
@@ -565,24 +692,33 @@ def display_schedule_builder():
         uploaded_schedule = st.file_uploader("Upload Schedule JSON", type=["json"])
         if uploaded_schedule is not None:
             try:
-                loaded_schedule = json.load(uploaded_schedule)
+                loaded_data = json.load(uploaded_schedule)
                 
-                # Load and process course configurations if included
-                if isinstance(loaded_schedule, dict) and 'schedule' in loaded_schedule and 'configurations' in loaded_schedule:
+                # Check if this is a complete package or just a schedule
+                if isinstance(loaded_data, dict) and 'schedule' in loaded_data and 'configurations' in loaded_data:
                     # Apply backward compatibility for loaded configurations
-                    for course, config in loaded_schedule['configurations'].items():
+                    for course, config in loaded_data['configurations'].items():
+                        # Handle officer_enlisted_ratio compatibility
                         if 'officer_enlisted_ratio' in config:
                             if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
                                 config['officer_enlisted_ratio'] = None
+                        
+                        # Handle prerequisites compatibility
+                        if 'prerequisites' in config and isinstance(config['prerequisites'], list):
+                            config['prerequisites'] = {
+                                'type': 'AND',
+                                'courses': config['prerequisites']
+                            }
+                            config['or_prerequisites'] = []
                     
-                    st.session_state.course_configs.update(loaded_schedule['configurations'])
-                    st.session_state.future_schedule = loaded_schedule['schedule']
+                    st.session_state.course_configs.update(loaded_data['configurations'])
+                    st.session_state.future_schedule = loaded_data['schedule']
                 else:
                     # Assume it's just a schedule without configurations
-                    st.session_state.future_schedule = loaded_schedule
+                    st.session_state.future_schedule = loaded_data
                 
                 st.success("Schedule loaded successfully!")
-                st.rerun()
+                st.experimental_rerun()
             except Exception as e:
                 st.error(f"Error loading schedule: {e}")
 
@@ -627,9 +763,17 @@ def display_simulation_page():
     if st.button("Run Simulation"):
         with st.spinner("Running simulation..."):
             # Prepare inputs for simulation
+            course_configs_copy = copy.deepcopy(st.session_state.course_configs)
+            
+            # Apply backward compatibility to all configurations
+            for course, config in course_configs_copy.items():
+                if 'officer_enlisted_ratio' in config:
+                    if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
+                        config['officer_enlisted_ratio'] = None
+            
             simulation_inputs = {
                 'schedule': st.session_state.future_schedule,
-                'course_configs': st.session_state.course_configs,
+                'course_configs': course_configs_copy,
                 'historical_data': st.session_state.historical_analysis,
                 'num_students': num_students,
                 'num_iterations': num_iterations,
@@ -781,9 +925,17 @@ def display_optimization_page():
     if st.button("Run Optimization"):
         with st.spinner("Optimizing schedule... This may take a few minutes."):
             # Prepare optimization inputs
+            course_configs_copy = copy.deepcopy(st.session_state.course_configs)
+            
+            # Apply backward compatibility
+            for course, config in course_configs_copy.items():
+                if 'officer_enlisted_ratio' in config:
+                    if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
+                        config['officer_enlisted_ratio'] = None
+            
             optimization_inputs = {
                 'current_schedule': st.session_state.future_schedule,
-                'course_configs': st.session_state.course_configs,
+                'course_configs': course_configs_copy,
                 'simulation_results': st.session_state.simulation_results,
                 'historical_data': st.session_state.historical_analysis,
                 'optimization_goal': optimization_goal,
