@@ -20,13 +20,33 @@ class Student:
         self.total_wait_time = 0
         self.graduation_time = None
     
-    def is_eligible_for(self, course, prerequisites):
+    def is_eligible_for(self, course, course_configs):
         """Check if student is eligible for a course based on prerequisites"""
-        if not prerequisites:
-            return True
+        if course not in course_configs:
+            return True  # No configuration means no prerequisites
         
-        for prereq in prerequisites:
-            if prereq not in self.completed_courses:
+        config = course_configs[course]
+        
+        # Get the prerequisites configuration
+        prereqs = config.get('prerequisites', {'type': 'AND', 'courses': []})
+        or_prereqs = config.get('or_prerequisites', [])
+        
+        # Check AND prerequisites
+        if prereqs['type'] == 'AND':
+            for prereq in prereqs['courses']:
+                if prereq not in self.completed_courses:
+                    return False
+        elif prereqs['type'] == 'OR' and prereqs['courses']:
+            # For OR logic, at least one course must be completed
+            if not any(prereq in self.completed_courses for prereq in prereqs['courses']):
+                return False
+        
+        # Check complex OR prerequisites (groups)
+        for group in or_prereqs:
+            if not group:  # Skip empty groups
+                continue
+            # For each group, at least one course must be completed
+            if not any(prereq in self.completed_courses for prereq in group):
                 return False
         
         return True
@@ -410,9 +430,8 @@ def find_next_course(student, course_configs):
         if course in student.completed_courses:
             continue
         
-        # Check prerequisites
-        prerequisites = config.get('prerequisites', [])
-        if student.is_eligible_for(course, prerequisites):
+        # Check if student is eligible
+        if student.is_eligible_for(course, course_configs):
             eligible_courses.append(course)
     
     # Return the first eligible course if any

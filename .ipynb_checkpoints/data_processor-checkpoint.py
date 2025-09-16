@@ -189,12 +189,46 @@ def infer_prerequisites(processed_data):
         # Total number of students who took this course
         total_students = sum(potential_prereqs.values())
         
-        # Consider a course as a prerequisite if at least 70% of students took it before
-        likely_prereqs = []
-        for prereq, count in potential_prereqs.items():
-            if count / total_students >= 0.7:
-                likely_prereqs.append(prereq)
+        # Consider strong prerequisites (courses most students took)
+        strong_prereqs = []
+        potential_or_groups = []
+        remaining_prereqs = []
         
-        prerequisites[course] = likely_prereqs
+        for prereq, count in potential_prereqs.items():
+            ratio = count / total_students
+            if ratio >= 0.9:  # Very strong prerequisite
+                strong_prereqs.append(prereq)
+            elif ratio >= 0.5:  # Potential OR relationship
+                remaining_prereqs.append((prereq, ratio))
+        
+        # Look for potential OR relationships among remaining prerequisites
+        # Two courses with similar percentages that add up to nearly 100% might be OR prerequisites
+        while remaining_prereqs:
+            prereq1, ratio1 = remaining_prereqs.pop(0)
+            or_group = [prereq1]
+            
+            for prereq2, ratio2 in remaining_prereqs[:]:
+                # If the two courses together cover almost all students (possible OR relationship)
+                if 0.9 <= ratio1 + ratio2 <= 1.1 and abs(ratio1 - ratio2) < 0.3:
+                    or_group.append(prereq2)
+                    remaining_prereqs.remove((prereq2, ratio2))
+            
+            if len(or_group) > 1:
+                potential_or_groups.append(or_group)
+            elif len(or_group) == 1:
+                # If just one course and it's taken by most students, consider it required
+                if ratio1 >= 0.7:
+                    strong_prereqs.append(prereq1)
+        
+        # Create the prerequisite structure
+        if strong_prereqs or potential_or_groups:
+            prereq_structure = {
+                'prerequisites': {
+                    'type': 'AND',
+                    'courses': strong_prereqs
+                },
+                'or_prerequisites': potential_or_groups
+            }
+            prerequisites[course] = prereq_structure
     
     return prerequisites

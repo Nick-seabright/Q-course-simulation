@@ -9,10 +9,10 @@ from simulation_engine import run_simulation
 from optimization import optimize_schedule
 import json
 
-st.set_page_config(page_title="Military Training Schedule Optimizer", layout="wide")
+st.set_page_config(page_title="Q-Course Training Schedule Optimizer", layout="wide")
 
 def main():
-    st.title("Military Training Schedule Optimization System")
+    st.title("Q-Course Training Schedule Optimization System")
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
@@ -99,7 +99,11 @@ def display_config_page():
         default_classes_per_year = int(historical_data.get('classes_per_year', 4))
         
         st.session_state.course_configs[selected_course] = {
-            'prerequisites': [],
+            'prerequisites': {
+                'type': 'AND',  # Default to AND logic (all prerequisites required)
+                'courses': []   # List of required courses (for AND)
+            },
+            'or_prerequisites': [],  # List of lists, each inner list is a set of OR prerequisites
             'max_capacity': default_class_size,
             'classes_per_year': default_classes_per_year,
             'reserved_seats': {
@@ -119,15 +123,136 @@ def display_config_page():
     if not isinstance(config['classes_per_year'], int):
         config['classes_per_year'] = int(config['classes_per_year'])
     
+    # Backward compatibility check for older config format
+    if isinstance(config.get('prerequisites'), list):
+        # Convert old format to new format
+        config['prerequisites'] = {
+            'type': 'AND',
+            'courses': config['prerequisites']
+        }
+        config['or_prerequisites'] = []
+    
     # Configure prerequisites
     st.subheader("Prerequisites")
-    prerequisite_options = [c for c in unique_courses if c != selected_course]
-    selected_prerequisites = st.multiselect(
-        "Select prerequisite courses", 
-        prerequisite_options, 
-        default=config['prerequisites']
+
+    with st.expander("How Prerequisites Work"):
+        st.markdown("""
+        ### Prerequisite Types:
+        
+        1. **All Required (AND)**: Student must complete ALL of the specified courses before taking this course.
+        
+        2. **Any Required (OR)**: Student must complete ANY ONE of the specified courses before taking this course.
+        
+        3. **Complex (AND/OR)**: For advanced prerequisite relationships. You can define:
+           - Courses that ALL must be completed (AND logic)
+           - Groups of courses where ANY ONE from EACH group must be completed (OR logic within groups, AND logic between groups)
+           
+        #### Example:
+        If you want to require either "Course A" OR "Course B", AND either "Course C" OR "Course D":
+        1. Leave the "Student must complete ALL of these courses" field empty
+        2. Create Group 1 with "Course A" and "Course B"
+        3. Create Group 2 with "Course C" and "Course D"
+        """)
+    
+    # Radio button to select prerequisite logic type
+    prereq_logic = st.radio(
+        "Prerequisite Logic", 
+        ["All Required (AND)", "Any Required (OR)", "Complex (AND/OR)"],
+        index=0 if config['prerequisites']['type'] == 'AND' and not config['or_prerequisites'] else 
+              1 if config['prerequisites']['type'] == 'OR' and not config['or_prerequisites'] else 2
     )
-    config['prerequisites'] = selected_prerequisites
+    
+    prerequisite_options = [c for c in unique_courses if c != selected_course]
+    
+    if prereq_logic == "All Required (AND)":
+        # Simple AND logic - all courses must be taken
+        config['prerequisites']['type'] = 'AND'
+        selected_prerequisites = st.multiselect(
+            "Student must complete ALL of these courses:", 
+            prerequisite_options, 
+            default=config['prerequisites']['courses']
+        )
+        config['prerequisites']['courses'] = selected_prerequisites
+        config['or_prerequisites'] = []  # Clear any OR prerequisites
+        
+    elif prereq_logic == "Any Required (OR)":
+        # Simple OR logic - any course can be taken
+        config['prerequisites']['type'] = 'OR'
+        selected_prerequisites = st.multiselect(
+            "Student must complete ANY ONE of these courses:", 
+            prerequisite_options, 
+            default=config['prerequisites']['courses']
+        )
+        config['prerequisites']['courses'] = selected_prerequisites
+        config['or_prerequisites'] = []  # Clear any complex OR prerequisites
+        
+    else:  # Complex AND/OR
+        # For complex logic, we'll use the or_prerequisites structure
+        st.write("Define complex prerequisite relationships:")
+        
+        # First, define any required courses (AND logic)
+        and_prerequisites = st.multiselect(
+            "Student must complete ALL of these courses (leave empty if none):", 
+            prerequisite_options, 
+            default=config['prerequisites']['courses'] if config['prerequisites']['type'] == 'AND' else []
+        )
+        config['prerequisites'] = {
+            'type': 'AND',
+            'courses': and_prerequisites
+        }
+        
+        # Then, define sets of OR prerequisites
+        st.write("AND the student must complete at least one course from EACH of the following groups:")
+        
+        # Initialize or_prerequisites if needed
+        if 'or_prerequisites' not in config or not config['or_prerequisites']:
+            config['or_prerequisites'] = [[]]  # Start with one empty group
+        
+        # Display existing OR groups
+        or_groups = config['or_prerequisites'].copy()
+        updated_or_groups = []
+        
+        for i, group in enumerate(or_groups):
+            col1, col2 = st.columns([4, 1])
+            
+            with col1:
+                selected_or_courses = st.multiselect(
+                    f"Group {i+1}: Student must complete ANY ONE of these courses:",
+                    [c for c in prerequisite_options if c not in and_prerequisites],
+                    default=group
+                )
+                if selected_or_courses:  # Only add non-empty groups
+                    updated_or_groups.append(selected_or_courses)
+            
+            with col2:
+                if st.button(f"Remove Group {i+1}", key=f"remove_group_{i}"):
+                    pass  # We'll filter out this group by not adding it to updated_or_groups
+        
+        # Add a button to add a new OR group
+        if st.button("Add Another OR Group"):
+            updated_or_groups.append([])  # Add an empty group
+        
+        config['or_prerequisites'] = updated_or_groups
+    
+    # Display the current prerequisite structure for clarity
+    st.subheader("Current Prerequisites Configuration")
+    
+    if prereq_logic == "All Required (AND)" and config['prerequisites']['courses']:
+        st.write("Student must complete ALL of these courses:")
+        st.write(", ".join(config['prerequisites']['courses']))
+    elif prereq_logic == "Any Required (OR)" and config['prerequisites']['courses']:
+        st.write("Student must complete ANY ONE of these courses:")
+        st.write(", ".join(config['prerequisites']['courses']))
+    else:
+        if config['prerequisites']['courses']:
+            st.write("Student must complete ALL of these courses:")
+            st.write(", ".join(config['prerequisites']['courses']))
+        
+        if config['or_prerequisites']:
+            st.write("AND at least one course from EACH of these groups:")
+            for i, group in enumerate(config['or_prerequisites']):
+                if group:  # Only show non-empty groups
+                    st.write(f"Group {i+1}: {' OR '.join(group)}")
     
     # Configure capacity
     st.subheader("Class Capacity")
