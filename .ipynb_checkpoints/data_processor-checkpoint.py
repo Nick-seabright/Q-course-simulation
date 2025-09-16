@@ -95,7 +95,7 @@ def analyze_historical_data(processed_data):
         classes = group.groupby(['CLS', 'Cls Start Date'])
         class_sizes = classes.size().values
         if len(class_sizes) > 0:
-            avg_class_size = np.mean(class_sizes)
+            avg_class_size = int(np.mean(class_sizes))  # Convert to integer
         else:
             avg_class_size = 0
             

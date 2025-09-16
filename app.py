@@ -79,7 +79,7 @@ def display_upload_page():
 def display_config_page():
     st.header("Course Configuration")
     
-    if st.session_state.processed_data is None:
+    if 'processed_data' not in st.session_state or st.session_state.processed_data is None:
         st.warning("Please upload and process data first.")
         return
     
@@ -94,10 +94,14 @@ def display_config_page():
         # Initialize with default values or from historical data if available
         historical_data = st.session_state.historical_analysis.get(selected_course, {})
         
+        # Ensure default values are all integers
+        default_class_size = int(historical_data.get('avg_class_size', 50))
+        default_classes_per_year = int(historical_data.get('classes_per_year', 4))
+        
         st.session_state.course_configs[selected_course] = {
             'prerequisites': [],
-            'max_capacity': historical_data.get('avg_class_size', 50),
-            'classes_per_year': historical_data.get('classes_per_year', 4),
+            'max_capacity': default_class_size,
+            'classes_per_year': default_classes_per_year,
             'reserved_seats': {
                 'OF': 0,
                 'ADE': 0,
@@ -107,6 +111,13 @@ def display_config_page():
         }
     
     config = st.session_state.course_configs[selected_course]
+    
+    # Ensure numeric values are integers to avoid type conflicts
+    if not isinstance(config['max_capacity'], int):
+        config['max_capacity'] = int(config['max_capacity'])
+    
+    if not isinstance(config['classes_per_year'], int):
+        config['classes_per_year'] = int(config['classes_per_year'])
     
     # Configure prerequisites
     st.subheader("Prerequisites")
@@ -123,49 +134,61 @@ def display_config_page():
     max_capacity = st.number_input(
         "Maximum number of students per class", 
         min_value=1, 
-        value=config['max_capacity']
+        value=int(config['max_capacity'])  # Explicitly convert to int
     )
-    config['max_capacity'] = max_capacity
+    config['max_capacity'] = int(max_capacity)  # Ensure it's stored as int
     
     # Configure classes per year
     st.subheader("Schedule Frequency")
     classes_per_year = st.number_input(
         "Number of classes per fiscal year (Oct 1 - Sep 30)", 
         min_value=1, 
-        value=config['classes_per_year']
+        value=int(config['classes_per_year'])  # Explicitly convert to int
     )
-    config['classes_per_year'] = classes_per_year
+    config['classes_per_year'] = int(classes_per_year)  # Ensure it's stored as int
     
     # Configure reserved seats
     st.subheader("Reserved Seats")
     col1, col2, col3 = st.columns(3)
     
     with col1:
+        # Ensure reserved seats are integers
+        if not isinstance(config['reserved_seats']['OF'], int):
+            config['reserved_seats']['OF'] = int(config['reserved_seats']['OF'])
+            
         of_seats = st.number_input(
             "OF (Officer) Seats", 
             min_value=0, 
-            max_value=max_capacity,
-            value=config['reserved_seats']['OF']
+            max_value=int(max_capacity),
+            value=int(config['reserved_seats']['OF'])
         )
-        config['reserved_seats']['OF'] = of_seats
+        config['reserved_seats']['OF'] = int(of_seats)
         
     with col2:
+        # Ensure reserved seats are integers
+        if not isinstance(config['reserved_seats']['ADE'], int):
+            config['reserved_seats']['ADE'] = int(config['reserved_seats']['ADE'])
+            
         ade_seats = st.number_input(
             "ADE (Active Duty Enlisted) Seats", 
             min_value=0, 
-            max_value=max_capacity,
-            value=config['reserved_seats']['ADE']
+            max_value=int(max_capacity),
+            value=int(config['reserved_seats']['ADE'])
         )
-        config['reserved_seats']['ADE'] = ade_seats
+        config['reserved_seats']['ADE'] = int(ade_seats)
         
     with col3:
+        # Ensure reserved seats are integers
+        if not isinstance(config['reserved_seats']['NG'], int):
+            config['reserved_seats']['NG'] = int(config['reserved_seats']['NG'])
+            
         ng_seats = st.number_input(
             "NG (National Guard) Seats", 
             min_value=0, 
-            max_value=max_capacity,
-            value=config['reserved_seats']['NG']
+            max_value=int(max_capacity),
+            value=int(config['reserved_seats']['NG'])
         )
-        config['reserved_seats']['NG'] = ng_seats
+        config['reserved_seats']['NG'] = int(ng_seats)
     
     # Validate reserved seats
     total_reserved = of_seats + ade_seats + ng_seats
@@ -242,9 +265,9 @@ def display_schedule_builder():
         duration = st.number_input("Duration (days)", min_value=1, value=30)
     with col3:
         class_size = st.number_input("Class Size", 
-                                     min_value=1, 
-                                     max_value=st.session_state.course_configs[course_title]['max_capacity'],
-                                     value=st.session_state.course_configs[course_title]['max_capacity'])
+                                  min_value=1, 
+                                  max_value=int(st.session_state.course_configs[course_title]['max_capacity']),
+                                  value=int(st.session_state.course_configs[course_title]['max_capacity']))
     
     class_end_date = class_start_date + datetime.timedelta(days=duration)
     
