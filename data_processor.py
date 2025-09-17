@@ -44,13 +44,25 @@ def process_data(raw_data):
     
     # Convert date columns to datetime
     date_columns = ['Cls Start Date', 'Cls End Date', 'Input Date', 'Output Date']
+    
+    # Add Arrival Date to date columns if it exists
+    if 'Arrival Date' in data.columns:
+        date_columns.append('Arrival Date')
+    
     for col in date_columns:
         data[col] = pd.to_datetime(data[col], errors='coerce')
     
+    # If Arrival Date doesn't exist, estimate it based on Input Date
+    if 'Arrival Date' not in data.columns:
+        # Estimate arrival as 3 days before class start by default
+        data['Arrival Date'] = data['Cls Start Date'] - pd.Timedelta(days=3)
+        st.warning("Arrival Date column not found. Estimating arrival as 3 days before class start.")
+    
+    # Calculate days between arrival and class start
+    data['Days Before Class'] = (data['Cls Start Date'] - data['Arrival Date']).dt.days
+    
     # Calculate class duration
     data['Duration'] = (data['Cls End Date'] - data['Cls Start Date']).dt.days
-    
-    # Determine student status based on the correct status codes
     
     # Determine if a student started a class (I=New Input, J=Retrainee In, Q=Recycle In)
     data['Started'] = data['Input Stat'].isin(['I', 'J', 'Q'])
@@ -274,19 +286,22 @@ def extract_historical_arrival_patterns(processed_data):
     Returns:
         dict: Dictionary of arrival patterns
     """
-    # Check if required columns exist
-    if 'Cls Start Date' not in processed_data.columns or 'Input Date' not in processed_data.columns:
-        return None
-    
-    # Filter to only include valid data
-    valid_data = processed_data.dropna(subset=['Cls Start Date', 'Input Date'])
-    
-    # Calculate days before class start that students arrive
-    valid_data['days_before'] = (valid_data['Cls Start Date'] - valid_data['Input Date']).dt.days
-    
-    # Filter out negative values (input after class start) and unreasonably large values
-    valid_arrivals = valid_data[(valid_data['days_before'] >= 0) & (valid_data['days_before'] <= 90)]
-    
+    # Use Arrival Date directly if available, otherwise use Days Before Class
+    if 'Arrival Date' in processed_data.columns:
+        # Filter to only include valid data
+        valid_data = processed_data.dropna(subset=['Arrival Date', 'Cls Start Date'])
+        
+        # Calculate days before class start that students arrive
+        valid_data['days_before'] = (valid_data['Cls Start Date'] - valid_data['Arrival Date']).dt.days
+        
+        # Filter out negative values (arrival after class start) and unreasonably large values
+        valid_arrivals = valid_data[(valid_data['days_before'] >= 0) & (valid_data['days_before'] <= 90)]
+    else:
+        # Use the calculated Days Before Class field
+        valid_data = processed_data.dropna(subset=['Days Before Class'])
+        valid_data['days_before'] = valid_data['Days Before Class']
+        valid_arrivals = valid_data[(valid_data['days_before'] >= 0) & (valid_data['days_before'] <= 90)]
+        
     if len(valid_arrivals) == 0:
         return None
     
@@ -294,7 +309,7 @@ def extract_historical_arrival_patterns(processed_data):
     avg_days_before = valid_arrivals['days_before'].mean()
     
     # Extract monthly distribution of arrivals
-    valid_arrivals['arrival_month'] = valid_arrivals['Input Date'].dt.month_name()
+    valid_arrivals['arrival_month'] = valid_arrivals['Arrival Date'].dt.month_name()
     monthly_counts = valid_arrivals['arrival_month'].value_counts()
     total_students = monthly_counts.sum()
     

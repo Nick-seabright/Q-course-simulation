@@ -345,11 +345,9 @@ def run_simulation(inputs):
         total_days_before = []
         
         if arrival_method == "before_class":
-            # Generate students who arrive before specific classes
-            students = generate_before_class_students(
-                classes, num_students, arrival_days_before, 
-                mos_distribution, arrival_dates_by_month, total_days_before
-            )
+            # If historical data includes actual arrival dates, use those instead of a fixed offset
+            if 'avg_days_before' in historical_arrival_patterns:
+                arrival_days_before = int(historical_arrival_patterns.get('avg_days_before', 3))
         else:
             # Generate students who arrive continuously throughout the year
             students = generate_continuous_students(
