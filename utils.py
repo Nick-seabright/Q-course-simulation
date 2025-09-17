@@ -6,10 +6,8 @@ from collections import defaultdict
 def ensure_config_compatibility(config):
     """
     Ensure backward compatibility with older configuration formats
-    
     Args:
         config (dict): Course configuration dictionary
-        
     Returns:
         dict: Updated configuration with compatible format
     """
@@ -37,22 +35,28 @@ def ensure_config_compatibility(config):
         }
         config['required_for_all_mos'] = False
     
+    # Add even MOS ratio setting if it doesn't exist
+    if 'use_even_mos_ratio' not in config:
+        config['use_even_mos_ratio'] = False
+        
     return config
 
 def calculate_fiscal_year(date):
     """
     Calculate the fiscal year for a given date.
     The fiscal year runs from October 1 to September 30.
-    
     Args:
         date (datetime): The date to calculate fiscal year for
-        
     Returns:
         int: Fiscal year
     """
     if isinstance(date, str):
-        date = pd.to_datetime(date)
-    
+        try:
+            date = pd.to_datetime(date)
+        except:
+            # Return current year if date parsing fails
+            return datetime.datetime.now().year
+            
     if date.month >= 10:  # October through December
         return date.year + 1
     else:  # January through September
@@ -61,10 +65,8 @@ def calculate_fiscal_year(date):
 def parse_ratio(ratio_str):
     """
     Parse a ratio string (e.g., '1:4') into a tuple of integers
-    
     Args:
         ratio_str (str): String representation of a ratio
-        
     Returns:
         tuple: Tuple of (numerator, denominator)
     """
@@ -74,21 +76,30 @@ def parse_ratio(ratio_str):
     try:
         numerator, denominator = ratio_str.split(':')
         return (int(numerator), int(denominator))
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, TypeError):
+        # Log the error for debugging
+        print(f"Error parsing ratio string: '{ratio_str}'")
         # Default to 1:4 if parsing fails
         return (1, 4)
 
 def format_duration(days):
     """
     Format duration in days to a human-readable string
-    
     Args:
         days (int): Duration in days
-        
     Returns:
         str: Formatted duration string
     """
-    if days < 7:
+    try:
+        days = int(days)
+    except (ValueError, TypeError):
+        return "Invalid duration"
+        
+    if days < 0:
+        return "Invalid duration"
+    elif days == 0:
+        return "0 days"
+    elif days < 7:
         return f"{days} days"
     elif days < 30:
         weeks = days // 7
@@ -119,21 +130,25 @@ def format_duration(days):
 def generate_date_range(start_date, end_date, fiscal_year=False):
     """
     Generate a list of dates between start_date and end_date
-    
     Args:
         start_date (datetime): Start date
         end_date (datetime): End date
         fiscal_year (bool): If True, generate dates by fiscal year
-        
     Returns:
         list: List of date strings
     """
-    if isinstance(start_date, str):
-        start_date = pd.to_datetime(start_date)
-    
-    if isinstance(end_date, str):
-        end_date = pd.to_datetime(end_date)
-    
+    # Validate input dates
+    try:
+        if isinstance(start_date, str):
+            start_date = pd.to_datetime(start_date)
+        if isinstance(end_date, str):
+            end_date = pd.to_datetime(end_date)
+    except:
+        return []  # Return empty list if date parsing fails
+        
+    if start_date > end_date:
+        return []  # Return empty list if start date is after end date
+        
     # Generate date range
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
     
@@ -145,7 +160,6 @@ def generate_date_range(start_date, end_date, fiscal_year=False):
             if fy not in fiscal_years:
                 fiscal_years[fy] = []
             fiscal_years[fy].append(date.strftime('%Y-%m-%d'))
-        
         return fiscal_years
     else:
         return [date.strftime('%Y-%m-%d') for date in date_range]
@@ -153,61 +167,66 @@ def generate_date_range(start_date, end_date, fiscal_year=False):
 def calculate_class_conflicts(schedule):
     """
     Calculate conflicts between classes in a schedule
-    
     Args:
         schedule (list): List of class dictionaries
-        
     Returns:
         list: List of conflict dictionaries
     """
+    if not schedule:
+        return []  # Return empty list if schedule is empty
+        
     conflicts = []
     
-    # Convert schedule to DataFrame
-    schedule_df = pd.DataFrame(schedule)
-    
-    # Convert date strings to datetime
-    schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
-    schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
-    
-    # Check each pair of classes for conflicts
-    for i, class1 in schedule_df.iterrows():
-        for j, class2 in schedule_df.iterrows():
-            if i >= j:  # Skip self-comparison and duplicates
-                continue
-            
-            # Check if classes overlap in time
-            if (class1['start_date'] <= class2['end_date'] and class1['end_date'] >= class2['start_date']):
-                # Calculate overlap days
-                overlap_start = max(class1['start_date'], class2['start_date'])
-                overlap_end = min(class1['end_date'], class2['end_date'])
-                overlap_days = (overlap_end - overlap_start).days + 1
+    try:
+        # Convert schedule to DataFrame
+        schedule_df = pd.DataFrame(schedule)
+        
+        # Convert date strings to datetime
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+        
+        # Check each pair of classes for conflicts
+        for i, class1 in schedule_df.iterrows():
+            for j, class2 in schedule_df.iterrows():
+                if i >= j:  # Skip self-comparison and duplicates
+                    continue
                 
-                # Check for MOS allocation overlap
-                mos_overlap = False
-                if 'mos_allocation' in class1 and 'mos_allocation' in class2:
-                    # Find MOS paths that overlap between the classes
-                    common_mos = set(class1['mos_allocation'].keys()) & set(class2['mos_allocation'].keys())
+                # Check if classes overlap in time
+                if (class1['start_date'] <= class2['end_date'] and class1['end_date'] >= class2['start_date']):
+                    # Calculate overlap days
+                    overlap_start = max(class1['start_date'], class2['start_date'])
+                    overlap_end = min(class1['end_date'], class2['end_date'])
+                    overlap_days = (overlap_end - overlap_start).days + 1
                     
-                    # If there are common MOS paths with allocations > 0, there's a potential MOS conflict
-                    for mos in common_mos:
-                        if class1['mos_allocation'].get(mos, 0) > 0 and class2['mos_allocation'].get(mos, 0) > 0:
-                            mos_overlap = True
-                            break
-                else:
-                    # If MOS allocation not specified, assume overlap
-                    mos_overlap = True
-                
-                if mos_overlap:
-                    conflicts.append({
-                        'course1': class1['course_title'],
-                        'course2': class2['course_title'],
-                        'start1': class1['start_date'].strftime('%Y-%m-%d'),
-                        'end1': class1['end_date'].strftime('%Y-%m-%d'),
-                        'start2': class2['start_date'].strftime('%Y-%m-%d'),
-                        'end2': class2['end_date'].strftime('%Y-%m-%d'),
-                        'overlap_days': overlap_days
-                    })
-    
+                    # Check for MOS allocation overlap
+                    mos_overlap = False
+                    if 'mos_allocation' in class1 and 'mos_allocation' in class2:
+                        # Find MOS paths that overlap between the classes
+                        common_mos = set(class1['mos_allocation'].keys()) & set(class2['mos_allocation'].keys())
+                        
+                        # If there are common MOS paths with allocations > 0, there's a potential MOS conflict
+                        for mos in common_mos:
+                            if class1['mos_allocation'].get(mos, 0) > 0 and class2['mos_allocation'].get(mos, 0) > 0:
+                                mos_overlap = True
+                                break
+                    else:
+                        # If MOS allocation not specified, assume overlap
+                        mos_overlap = True
+                    
+                    if mos_overlap:
+                        conflicts.append({
+                            'course1': class1['course_title'],
+                            'course2': class2['course_title'],
+                            'start1': class1['start_date'].strftime('%Y-%m-%d'),
+                            'end1': class1['end_date'].strftime('%Y-%m-%d'),
+                            'start2': class2['start_date'].strftime('%Y-%m-%d'),
+                            'end2': class2['end_date'].strftime('%Y-%m-%d'),
+                            'overlap_days': overlap_days
+                        })
+    except Exception as e:
+        print(f"Error calculating class conflicts: {e}")
+        return []
+        
     # Sort conflicts by overlap days (descending)
     conflicts.sort(key=lambda x: x['overlap_days'], reverse=True)
     
@@ -216,108 +235,112 @@ def calculate_class_conflicts(schedule):
 def validate_schedule(schedule, course_configs):
     """
     Validate a schedule against course configurations and constraints
-    
     Args:
         schedule (list): List of class dictionaries
         course_configs (dict): Dictionary of course configurations
-        
     Returns:
         dict: Validation results
     """
     issues = []
     warnings = []
     
-    # Convert schedule to DataFrame
-    schedule_df = pd.DataFrame(schedule)
+    # Check for empty schedule
+    if not schedule:
+        return {
+            'valid': True,
+            'issues': [],
+            'warnings': ["Schedule is empty. No validation performed."]
+        }
     
-    # Convert date strings to datetime
-    schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
-    schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
-    
-    # Check for date ranges
-    invalid_dates = schedule_df[schedule_df['start_date'] >= schedule_df['end_date']]
-    if not invalid_dates.empty:
-        for _, row in invalid_dates.iterrows():
-            issues.append(f"Invalid date range for {row['course_title']}: start date is on or after end date")
-    
-    # Check for class conflicts
-    conflicts = calculate_class_conflicts(schedule)
-    for conflict in conflicts:
-        # Determine if these courses have prerequisites between them
-        course1 = conflict['course1']
-        course2 = conflict['course2']
+    try:
+        # Convert schedule to DataFrame
+        schedule_df = pd.DataFrame(schedule)
         
-        # Skip reporting conflicts for unrelated courses
-        is_related = False
+        # Convert date strings to datetime
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
         
-        # Check if one is a prerequisite of the other
-        if course1 in course_configs and course2 in get_prerequisites(course_configs, course1):
-            is_related = True
+        # Check for date ranges
+        invalid_dates = schedule_df[schedule_df['start_date'] >= schedule_df['end_date']]
+        if not invalid_dates.empty:
+            for _, row in invalid_dates.iterrows():
+                issues.append(f"Invalid date range for {row['course_title']}: start date is on or after end date")
         
-        if course2 in course_configs and course1 in get_prerequisites(course_configs, course2):
-            is_related = True
-        
-        if is_related:
-            issues.append(
-                f"Schedule conflict: {course1} and {course2} overlap by {conflict['overlap_days']} days, " +
-                f"but one is a prerequisite of the other"
-            )
-        else:
-            warnings.append(
-                f"Potential resource conflict: {course1} and {course2} overlap by {conflict['overlap_days']} days"
-            )
-    
-    # Check classes per fiscal year
-    course_fy_counts = defaultdict(lambda: defaultdict(int))
-    
-    for _, row in schedule_df.iterrows():
-        course = row['course_title']
-        fy = calculate_fiscal_year(row['start_date'])
-        course_fy_counts[course][fy] += 1
-    
-    for course, fy_counts in course_fy_counts.items():
-        if course in course_configs:
-            expected_classes = course_configs[course].get('classes_per_year', 0)
+        # Check for class conflicts
+        conflicts = calculate_class_conflicts(schedule)
+        for conflict in conflicts:
+            # Determine if these courses have prerequisites between them
+            course1 = conflict['course1']
+            course2 = conflict['course2']
             
-            for fy, count in fy_counts.items():
-                if expected_classes > 0 and count > expected_classes:
-                    warnings.append(
-                        f"FY{fy}: {course} has {count} classes scheduled, but configuration specifies {expected_classes} per year"
-                    )
-    
-    # Check class sizes
-    for _, row in schedule_df.iterrows():
-        course = row['course_title']
-        size = row['size']
-        
-        if course in course_configs:
-            max_capacity = course_configs[course].get('max_capacity', 0)
+            # Skip reporting conflicts for unrelated courses
+            is_related = False
             
-            if max_capacity > 0 and size > max_capacity:
+            # Check if one is a prerequisite of the other
+            if course1 in course_configs and course2 in get_prerequisites(course_configs, course1):
+                is_related = True
+            if course2 in course_configs and course1 in get_prerequisites(course_configs, course2):
+                is_related = True
+            
+            if is_related:
                 issues.append(
-                    f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has size {size}, " +
-                    f"but maximum capacity is {max_capacity}"
+                    f"Schedule conflict: {course1} and {course2} overlap by {conflict['overlap_days']} days, " +
+                    f"but one is a prerequisite of the other"
                 )
-    
-    # Check MOS allocations
-    for _, row in schedule_df.iterrows():
-        if 'mos_allocation' in row and row['mos_allocation']:
+            else:
+                warnings.append(
+                    f"Potential resource conflict: {course1} and {course2} overlap by {conflict['overlap_days']} days"
+                )
+        
+        # Check classes per fiscal year
+        course_fy_counts = defaultdict(lambda: defaultdict(int))
+        for _, row in schedule_df.iterrows():
             course = row['course_title']
-            total_allocation = sum(row['mos_allocation'].values())
-            
-            # Check if total MOS allocation exceeds class size
-            if total_allocation > row['size']:
-                issues.append(
-                    f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has total MOS allocation {total_allocation}, " +
-                    f"but class size is {row['size']}"
-                )
-            
-            # Check if any MOS has zero allocation
-            for mos, count in row['mos_allocation'].items():
-                if count < 0:
+            fy = calculate_fiscal_year(row['start_date'])
+            course_fy_counts[course][fy] += 1
+        
+        for course, fy_counts in course_fy_counts.items():
+            if course in course_configs:
+                expected_classes = course_configs[course].get('classes_per_year', 0)
+                for fy, count in fy_counts.items():
+                    if expected_classes > 0 and count > expected_classes:
+                        warnings.append(
+                            f"FY{fy}: {course} has {count} classes scheduled, but configuration specifies {expected_classes} per year"
+                        )
+        
+        # Check class sizes
+        for _, row in schedule_df.iterrows():
+            course = row['course_title']
+            size = row['size']
+            if course in course_configs:
+                max_capacity = course_configs[course].get('max_capacity', 0)
+                if max_capacity > 0 and size > max_capacity:
                     issues.append(
-                        f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has negative allocation for {mos}: {count}"
+                        f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has size {size}, " +
+                        f"but maximum capacity is {max_capacity}"
                     )
+        
+        # Check MOS allocations
+        for _, row in schedule_df.iterrows():
+            if 'mos_allocation' in row and row['mos_allocation']:
+                course = row['course_title']
+                total_allocation = sum(row['mos_allocation'].values())
+                
+                # Check if total MOS allocation exceeds class size
+                if total_allocation > row['size']:
+                    issues.append(
+                        f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has total MOS allocation {total_allocation}, " +
+                        f"but class size is {row['size']}"
+                    )
+                
+                # Check if any MOS has zero allocation
+                for mos, count in row['mos_allocation'].items():
+                    if count < 0:
+                        issues.append(
+                            f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has negative allocation for {mos}: {count}"
+                        )
+    except Exception as e:
+        issues.append(f"Error validating schedule: {e}")
     
     return {
         'valid': len(issues) == 0,
@@ -328,17 +351,15 @@ def validate_schedule(schedule, course_configs):
 def get_prerequisites(course_configs, course):
     """
     Get all prerequisites for a course (including from OR groups and MOS paths)
-    
     Args:
         course_configs (dict): Dictionary of course configurations
         course (str): Course to get prerequisites for
-        
     Returns:
         list: List of prerequisite courses
     """
     if course not in course_configs:
         return []
-    
+        
     config = course_configs[course]
     all_prereqs = set()
     
@@ -364,13 +385,431 @@ def get_prerequisites(course_configs, course):
 def analyze_mos_enrollment(schedule):
     """
     Analyze MOS enrollment patterns across the schedule
-    
     Args:
         schedule (list): List of class dictionaries
-        
     Returns:
         dict: MOS enrollment statistics
     """
+    # Handle empty schedule
+    if not schedule:
+        return {
+            'mos_stats': {
+                '18A': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18B': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18C': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18D': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18E': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0}
+            },
+            'course_mos_ratios': {}
+        }
+    
+    # Track MOS enrollment
+    mos_enrollment = {
+import pandas as pd
+import numpy as np
+import datetime
+from collections import defaultdict
+
+def ensure_config_compatibility(config):
+    """
+    Ensure backward compatibility with older configuration formats
+    Args:
+        config (dict): Course configuration dictionary
+    Returns:
+        dict: Updated configuration with compatible format
+    """
+    # Handle officer-enlisted ratio compatibility
+    if 'officer_enlisted_ratio' in config:
+        if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
+            config['officer_enlisted_ratio'] = None
+    
+    # Handle prerequisites compatibility (if you've updated that structure)
+    if 'prerequisites' in config and isinstance(config['prerequisites'], list):
+        config['prerequisites'] = {
+            'type': 'AND',
+            'courses': config['prerequisites']
+        }
+        config['or_prerequisites'] = []
+    
+    # Add MOS paths if they don't exist
+    if 'mos_paths' not in config:
+        config['mos_paths'] = {
+            '18A': [],
+            '18B': [],
+            '18C': [],
+            '18D': [],
+            '18E': []
+        }
+        config['required_for_all_mos'] = False
+    
+    # Add even MOS ratio setting if it doesn't exist
+    if 'use_even_mos_ratio' not in config:
+        config['use_even_mos_ratio'] = False
+        
+    return config
+
+def calculate_fiscal_year(date):
+    """
+    Calculate the fiscal year for a given date.
+    The fiscal year runs from October 1 to September 30.
+    Args:
+        date (datetime): The date to calculate fiscal year for
+    Returns:
+        int: Fiscal year
+    """
+    if isinstance(date, str):
+        try:
+            date = pd.to_datetime(date)
+        except:
+            # Return current year if date parsing fails
+            return datetime.datetime.now().year
+            
+    if date.month >= 10:  # October through December
+        return date.year + 1
+    else:  # January through September
+        return date.year
+
+def parse_ratio(ratio_str):
+    """
+    Parse a ratio string (e.g., '1:4') into a tuple of integers
+    Args:
+        ratio_str (str): String representation of a ratio
+    Returns:
+        tuple: Tuple of (numerator, denominator)
+    """
+    if not ratio_str:  # Handle None or empty string
+        return None
+        
+    try:
+        numerator, denominator = ratio_str.split(':')
+        return (int(numerator), int(denominator))
+    except (ValueError, AttributeError, TypeError):
+        # Log the error for debugging
+        print(f"Error parsing ratio string: '{ratio_str}'")
+        # Default to 1:4 if parsing fails
+        return (1, 4)
+
+def format_duration(days):
+    """
+    Format duration in days to a human-readable string
+    Args:
+        days (int): Duration in days
+    Returns:
+        str: Formatted duration string
+    """
+    try:
+        days = int(days)
+    except (ValueError, TypeError):
+        return "Invalid duration"
+        
+    if days < 0:
+        return "Invalid duration"
+    elif days == 0:
+        return "0 days"
+    elif days < 7:
+        return f"{days} days"
+    elif days < 30:
+        weeks = days // 7
+        remaining_days = days % 7
+        if remaining_days == 0:
+            return f"{weeks} weeks"
+        else:
+            return f"{weeks} weeks, {remaining_days} days"
+    elif days < 365:
+        months = days // 30
+        remaining_days = days % 30
+        if remaining_days == 0:
+            return f"{months} months"
+        else:
+            return f"{months} months, {remaining_days} days"
+    else:
+        years = days // 365
+        remaining_days = days % 365
+        if remaining_days == 0:
+            return f"{years} years"
+        else:
+            months = remaining_days // 30
+            if months == 0:
+                return f"{years} years"
+            else:
+                return f"{years} years, {months} months"
+
+def generate_date_range(start_date, end_date, fiscal_year=False):
+    """
+    Generate a list of dates between start_date and end_date
+    Args:
+        start_date (datetime): Start date
+        end_date (datetime): End date
+        fiscal_year (bool): If True, generate dates by fiscal year
+    Returns:
+        list: List of date strings
+    """
+    # Validate input dates
+    try:
+        if isinstance(start_date, str):
+            start_date = pd.to_datetime(start_date)
+        if isinstance(end_date, str):
+            end_date = pd.to_datetime(end_date)
+    except:
+        return []  # Return empty list if date parsing fails
+        
+    if start_date > end_date:
+        return []  # Return empty list if start date is after end date
+        
+    # Generate date range
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    
+    if fiscal_year:
+        # Group by fiscal year
+        fiscal_years = {}
+        for date in date_range:
+            fy = calculate_fiscal_year(date)
+            if fy not in fiscal_years:
+                fiscal_years[fy] = []
+            fiscal_years[fy].append(date.strftime('%Y-%m-%d'))
+        return fiscal_years
+    else:
+        return [date.strftime('%Y-%m-%d') for date in date_range]
+
+def calculate_class_conflicts(schedule):
+    """
+    Calculate conflicts between classes in a schedule
+    Args:
+        schedule (list): List of class dictionaries
+    Returns:
+        list: List of conflict dictionaries
+    """
+    if not schedule:
+        return []  # Return empty list if schedule is empty
+        
+    conflicts = []
+    
+    try:
+        # Convert schedule to DataFrame
+        schedule_df = pd.DataFrame(schedule)
+        
+        # Convert date strings to datetime
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+        
+        # Check each pair of classes for conflicts
+        for i, class1 in schedule_df.iterrows():
+            for j, class2 in schedule_df.iterrows():
+                if i >= j:  # Skip self-comparison and duplicates
+                    continue
+                
+                # Check if classes overlap in time
+                if (class1['start_date'] <= class2['end_date'] and class1['end_date'] >= class2['start_date']):
+                    # Calculate overlap days
+                    overlap_start = max(class1['start_date'], class2['start_date'])
+                    overlap_end = min(class1['end_date'], class2['end_date'])
+                    overlap_days = (overlap_end - overlap_start).days + 1
+                    
+                    # Check for MOS allocation overlap
+                    mos_overlap = False
+                    if 'mos_allocation' in class1 and 'mos_allocation' in class2:
+                        # Find MOS paths that overlap between the classes
+                        common_mos = set(class1['mos_allocation'].keys()) & set(class2['mos_allocation'].keys())
+                        
+                        # If there are common MOS paths with allocations > 0, there's a potential MOS conflict
+                        for mos in common_mos:
+                            if class1['mos_allocation'].get(mos, 0) > 0 and class2['mos_allocation'].get(mos, 0) > 0:
+                                mos_overlap = True
+                                break
+                    else:
+                        # If MOS allocation not specified, assume overlap
+                        mos_overlap = True
+                    
+                    if mos_overlap:
+                        conflicts.append({
+                            'course1': class1['course_title'],
+                            'course2': class2['course_title'],
+                            'start1': class1['start_date'].strftime('%Y-%m-%d'),
+                            'end1': class1['end_date'].strftime('%Y-%m-%d'),
+                            'start2': class2['start_date'].strftime('%Y-%m-%d'),
+                            'end2': class2['end_date'].strftime('%Y-%m-%d'),
+                            'overlap_days': overlap_days
+                        })
+    except Exception as e:
+        print(f"Error calculating class conflicts: {e}")
+        return []
+        
+    # Sort conflicts by overlap days (descending)
+    conflicts.sort(key=lambda x: x['overlap_days'], reverse=True)
+    
+    return conflicts
+
+def validate_schedule(schedule, course_configs):
+    """
+    Validate a schedule against course configurations and constraints
+    Args:
+        schedule (list): List of class dictionaries
+        course_configs (dict): Dictionary of course configurations
+    Returns:
+        dict: Validation results
+    """
+    issues = []
+    warnings = []
+    
+    # Check for empty schedule
+    if not schedule:
+        return {
+            'valid': True,
+            'issues': [],
+            'warnings': ["Schedule is empty. No validation performed."]
+        }
+    
+    try:
+        # Convert schedule to DataFrame
+        schedule_df = pd.DataFrame(schedule)
+        
+        # Convert date strings to datetime
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+        
+        # Check for date ranges
+        invalid_dates = schedule_df[schedule_df['start_date'] >= schedule_df['end_date']]
+        if not invalid_dates.empty:
+            for _, row in invalid_dates.iterrows():
+                issues.append(f"Invalid date range for {row['course_title']}: start date is on or after end date")
+        
+        # Check for class conflicts
+        conflicts = calculate_class_conflicts(schedule)
+        for conflict in conflicts:
+            # Determine if these courses have prerequisites between them
+            course1 = conflict['course1']
+            course2 = conflict['course2']
+            
+            # Skip reporting conflicts for unrelated courses
+            is_related = False
+            
+            # Check if one is a prerequisite of the other
+            if course1 in course_configs and course2 in get_prerequisites(course_configs, course1):
+                is_related = True
+            if course2 in course_configs and course1 in get_prerequisites(course_configs, course2):
+                is_related = True
+            
+            if is_related:
+                issues.append(
+                    f"Schedule conflict: {course1} and {course2} overlap by {conflict['overlap_days']} days, " +
+                    f"but one is a prerequisite of the other"
+                )
+            else:
+                warnings.append(
+                    f"Potential resource conflict: {course1} and {course2} overlap by {conflict['overlap_days']} days"
+                )
+        
+        # Check classes per fiscal year
+        course_fy_counts = defaultdict(lambda: defaultdict(int))
+        for _, row in schedule_df.iterrows():
+            course = row['course_title']
+            fy = calculate_fiscal_year(row['start_date'])
+            course_fy_counts[course][fy] += 1
+        
+        for course, fy_counts in course_fy_counts.items():
+            if course in course_configs:
+                expected_classes = course_configs[course].get('classes_per_year', 0)
+                for fy, count in fy_counts.items():
+                    if expected_classes > 0 and count > expected_classes:
+                        warnings.append(
+                            f"FY{fy}: {course} has {count} classes scheduled, but configuration specifies {expected_classes} per year"
+                        )
+        
+        # Check class sizes
+        for _, row in schedule_df.iterrows():
+            course = row['course_title']
+            size = row['size']
+            if course in course_configs:
+                max_capacity = course_configs[course].get('max_capacity', 0)
+                if max_capacity > 0 and size > max_capacity:
+                    issues.append(
+                        f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has size {size}, " +
+                        f"but maximum capacity is {max_capacity}"
+                    )
+        
+        # Check MOS allocations
+        for _, row in schedule_df.iterrows():
+            if 'mos_allocation' in row and row['mos_allocation']:
+                course = row['course_title']
+                total_allocation = sum(row['mos_allocation'].values())
+                
+                # Check if total MOS allocation exceeds class size
+                if total_allocation > row['size']:
+                    issues.append(
+                        f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has total MOS allocation {total_allocation}, " +
+                        f"but class size is {row['size']}"
+                    )
+                
+                # Check if any MOS has zero allocation
+                for mos, count in row['mos_allocation'].items():
+                    if count < 0:
+                        issues.append(
+                            f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has negative allocation for {mos}: {count}"
+                        )
+    except Exception as e:
+        issues.append(f"Error validating schedule: {e}")
+    
+    return {
+        'valid': len(issues) == 0,
+        'issues': issues,
+        'warnings': warnings
+    }
+
+def get_prerequisites(course_configs, course):
+    """
+    Get all prerequisites for a course (including from OR groups and MOS paths)
+    Args:
+        course_configs (dict): Dictionary of course configurations
+        course (str): Course to get prerequisites for
+    Returns:
+        list: List of prerequisite courses
+    """
+    if course not in course_configs:
+        return []
+        
+    config = course_configs[course]
+    all_prereqs = set()
+    
+    # Get standard prerequisites
+    if 'prerequisites' in config:
+        if isinstance(config['prerequisites'], list):
+            all_prereqs.update(config['prerequisites'])
+        elif isinstance(config['prerequisites'], dict):
+            all_prereqs.update(config['prerequisites'].get('courses', []))
+    
+    # Get OR prerequisites
+    if 'or_prerequisites' in config:
+        for group in config['or_prerequisites']:
+            all_prereqs.update(group)
+    
+    # Get MOS-specific prerequisites
+    if 'mos_paths' in config:
+        for mos, prereqs in config['mos_paths'].items():
+            all_prereqs.update(prereqs)
+    
+    return list(all_prereqs)  # Remove duplicates by converting set back to list
+
+def analyze_mos_enrollment(schedule):
+    """
+    Analyze MOS enrollment patterns across the schedule
+    Args:
+        schedule (list): List of class dictionaries
+    Returns:
+        dict: MOS enrollment statistics
+    """
+    # Handle empty schedule
+    if not schedule:
+        return {
+            'mos_stats': {
+                '18A': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18B': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18C': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18D': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0},
+                '18E': {'total': 0, 'avg_per_class': 0, 'max_per_class': 0, 'min_per_class': 0}
+            },
+            'course_mos_ratios': {}
+        }
+    
     # Track MOS enrollment
     mos_enrollment = {
         '18A': [],
@@ -393,7 +832,6 @@ def analyze_mos_enrollment(schedule):
     # Process each class
     for class_info in schedule:
         course = class_info['course_title']
-        
         if 'mos_allocation' in class_info and class_info['mos_allocation']:
             for mos, count in class_info['mos_allocation'].items():
                 if mos in mos_enrollment:
@@ -441,16 +879,14 @@ def analyze_mos_enrollment(schedule):
 def format_mos_allocation(mos_allocation):
     """
     Format MOS allocation for display
-    
     Args:
         mos_allocation (dict): Dictionary of MOS allocations
-        
     Returns:
         str: Formatted string representation
     """
     if not mos_allocation:
         return "None"
-    
+        
     parts = []
     for mos, count in mos_allocation.items():
         if count > 0:
@@ -458,22 +894,20 @@ def format_mos_allocation(mos_allocation):
     
     if not parts:
         return "None"
-    
+        
     return ", ".join(parts)
 
 def parse_mos_allocation(allocation_str):
     """
     Parse MOS allocation from string
-    
     Args:
         allocation_str (str): String representation of MOS allocation
-        
     Returns:
         dict: Dictionary of MOS allocations
     """
     if not allocation_str or allocation_str.lower() == "none":
         return {}
-    
+        
     allocation = {
         '18A': 0,
         '18B': 0,
@@ -494,28 +928,24 @@ def parse_mos_allocation(allocation_str):
             
             if mos in allocation:
                 allocation[mos] = count
-    except Exception:
+    except Exception as e:
+        print(f"Error parsing MOS allocation '{allocation_str}': {e}")
         # Return empty allocation if parsing fails
         return {}
-    
+        
     return allocation
 
 def calculate_schedule_metrics(schedule, course_configs):
     """
     Calculate overall metrics for a schedule
-    
     Args:
         schedule (list): List of class dictionaries
         course_configs (dict): Dictionary of course configurations
-        
     Returns:
         dict: Schedule metrics
     """
-    # Convert to DataFrame for easier manipulation
-    schedule_df = pd.DataFrame(schedule)
-    
-    # Skip if schedule is empty
-    if len(schedule_df) == 0:
+    # Handle empty schedule
+    if not schedule:
         return {
             'total_classes': 0,
             'total_seats': 0,
@@ -524,106 +954,121 @@ def calculate_schedule_metrics(schedule, course_configs):
             'avg_class_size': 0,
             'mos_distribution': {
                 '18A': 0, '18B': 0, '18C': 0, '18D': 0, '18E': 0
-            }
+            },
+            'seats_per_course': {},
+            'program_throughput': 0
         }
-    
-    # Convert dates to datetime
-    schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
-    schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
-    
-    # Calculate total classes and seats
-    total_classes = len(schedule_df)
-    total_seats = schedule_df['size'].sum()
-    
-    # Calculate schedule duration
-    min_date = schedule_df['start_date'].min()
-    max_date = schedule_df['end_date'].max()
-    duration_days = (max_date - min_date).days + 1
-    
-    # Calculate classes per month
-    months = duration_days / 30.0
-    classes_per_month = total_classes / months if months > 0 else 0
-    
-    # Calculate average class size
-    avg_class_size = total_seats / total_classes if total_classes > 0 else 0
-    
-    # Calculate MOS distribution
-    mos_counts = {
-        '18A': 0,
-        '18B': 0,
-        '18C': 0,
-        '18D': 0,
-        '18E': 0
-    }
-    
-    for _, row in schedule_df.iterrows():
-        if 'mos_allocation' in row and row['mos_allocation']:
-            for mos, count in row['mos_allocation'].items():
-                if mos in mos_counts:
-                    mos_counts[mos] += count
-    
-    # Calculate percentages
-    total_allocated = sum(mos_counts.values())
-    mos_distribution = {
-        mos: count / total_allocated if total_allocated > 0 else 0
-        for mos, count in mos_counts.items()
-    }
-    
-    # Calculate throughput metrics
-    # We'll estimate the number of students that could complete the full program
-    # based on the capacities and prerequisites
-    
-    # Group classes by course
-    courses = schedule_df.groupby('course_title')
-    
-    # Calculate seats per course
-    seats_per_course = {
-        course: group['size'].sum() for course, group in courses
-    }
-    
-    # Calculate potential bottlenecks
-    course_throughputs = {}
-    for course, config in course_configs.items():
-        if course not in seats_per_course:
-            continue
+        
+    try:
+        # Convert to DataFrame for easier manipulation
+        schedule_df = pd.DataFrame(schedule)
+        
+        # Convert dates to datetime
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+        
+        # Calculate total classes and seats
+        total_classes = len(schedule_df)
+        total_seats = schedule_df['size'].sum()
+        
+        # Calculate schedule duration
+        min_date = schedule_df['start_date'].min()
+        max_date = schedule_df['end_date'].max()
+        duration_days = (max_date - min_date).days + 1
+        
+        # Calculate classes per month
+        months = duration_days / 30.0
+        classes_per_month = total_classes / months if months > 0 else 0
+        
+        # Calculate average class size
+        avg_class_size = total_seats / total_classes if total_classes > 0 else 0
+        
+        # Calculate MOS distribution
+        mos_counts = {
+            '18A': 0,
+            '18B': 0,
+            '18C': 0,
+            '18D': 0,
+            '18E': 0
+        }
+        
+        for _, row in schedule_df.iterrows():
+            if 'mos_allocation' in row and row['mos_allocation']:
+                for mos, count in row['mos_allocation'].items():
+                    if mos in mos_counts:
+                        mos_counts[mos] += count
+        
+        # Calculate percentages
+        total_allocated = sum(mos_counts.values())
+        mos_distribution = {
+            mos: count / total_allocated if total_allocated > 0 else 0
+            for mos, count in mos_counts.items()
+        }
+        
+        # Calculate throughput metrics
+        # Group classes by course
+        courses = schedule_df.groupby('course_title')
+        
+        # Calculate seats per course
+        seats_per_course = {
+            course: group['size'].sum() for course, group in courses
+        }
+        
+        # Calculate potential bottlenecks
+        course_throughputs = {}
+        for course, config in course_configs.items():
+            if course not in seats_per_course:
+                continue
+                
+            # Get prerequisites
+            prereqs = []
+            if 'prerequisites' in config and isinstance(config['prerequisites'], dict):
+                prereqs.extend(config['prerequisites'].get('courses', []))
             
-        # Get prerequisites
-        prereqs = []
-        if 'prerequisites' in config and isinstance(config['prerequisites'], dict):
-            prereqs.extend(config['prerequisites'].get('courses', []))
+            # Calculate maximum possible throughput based on this course and its prerequisites
+            throughput = seats_per_course.get(course, 0)
+            for prereq in prereqs:
+                if prereq in seats_per_course:
+                    # Throughput is limited by the minimum seats available in any prerequisite
+                    throughput = min(throughput, seats_per_course[prereq])
+            
+            course_throughputs[course] = throughput
         
-        # Calculate maximum possible throughput based on this course and its prerequisites
-        throughput = seats_per_course.get(course, 0)
+        # Overall program throughput is the minimum throughput of any required course
+        program_throughput = min(course_throughputs.values()) if course_throughputs else 0
         
-        for prereq in prereqs:
-            if prereq in seats_per_course:
-                # Throughput is limited by the minimum seats available in any prerequisite
-                throughput = min(throughput, seats_per_course[prereq])
-        
-        course_throughputs[course] = throughput
-    
-    # Overall program throughput is the minimum throughput of any required course
-    program_throughput = min(course_throughputs.values()) if course_throughputs else 0
-    
-    return {
-        'total_classes': total_classes,
-        'total_seats': total_seats,
-        'duration_days': duration_days,
-        'classes_per_month': classes_per_month,
-        'avg_class_size': avg_class_size,
-        'mos_distribution': mos_distribution,
-        'seats_per_course': seats_per_course,
-        'program_throughput': program_throughput
-    }
+        return {
+            'total_classes': total_classes,
+            'total_seats': total_seats,
+            'duration_days': duration_days,
+            'classes_per_month': classes_per_month,
+            'avg_class_size': avg_class_size,
+            'mos_distribution': mos_distribution,
+            'seats_per_course': seats_per_course,
+            'program_throughput': program_throughput
+        }
+    except Exception as e:
+        print(f"Error calculating schedule metrics: {e}")
+        return {
+            'total_classes': 0,
+            'total_seats': 0,
+            'duration_days': 0,
+            'classes_per_month': 0,
+            'avg_class_size': 0,
+            'mos_distribution': {
+                '18A': 0, '18B': 0, '18C': 0, '18D': 0, '18E': 0
+            },
+            'seats_per_course': {},
+            'program_throughput': 0,
+            'error': str(e)
+        }
 
 def optimize_mos_allocation(class_info, mos_demand=None):
     """
     Optimize MOS allocation for a class based on demand
-    
     Args:
         class_info (dict): Class information
         mos_demand (dict): Dictionary of MOS demand percentages
-        
     Returns:
         dict: Optimized MOS allocation
     """
@@ -669,7 +1114,6 @@ def optimize_mos_allocation(class_info, mos_demand=None):
     elif remaining < 0:
         # Remove seats from MOS with most seats
         sorted_allocation = sorted(allocation.items(), key=lambda x: x[1], reverse=True)
-        
         for i in range(-remaining):
             if i < len(sorted_allocation):
                 mos = sorted_allocation[i][0]
@@ -681,122 +1125,141 @@ def optimize_mos_allocation(class_info, mos_demand=None):
 def compare_schedules(original_schedule, new_schedule):
     """
     Compare two schedules and identify changes
-    
     Args:
         original_schedule (list): Original schedule
         new_schedule (list): New schedule
-        
     Returns:
         dict: Comparison results
     """
-    # Convert to DataFrames
-    if original_schedule:
-        original_df = pd.DataFrame(original_schedule)
-        original_df['start_date'] = pd.to_datetime(original_df['start_date'])
-        original_df['end_date'] = pd.to_datetime(original_df['end_date'])
-    else:
-        original_df = pd.DataFrame(columns=['id', 'course_title', 'start_date', 'end_date', 'size'])
+    # Handle empty schedules
+    if not original_schedule and not new_schedule:
+        return {
+            'added_classes': [],
+            'removed_classes': [],
+            'modified_classes': [],
+            'original_metrics': {'total_classes': 0, 'total_seats': 0},
+            'new_metrics': {'total_classes': 0, 'total_seats': 0},
+            'net_change_classes': 0,
+            'net_change_seats': 0
+        }
     
-    if new_schedule:
-        new_df = pd.DataFrame(new_schedule)
-        new_df['start_date'] = pd.to_datetime(new_df['start_date'])
-        new_df['end_date'] = pd.to_datetime(new_df['end_date'])
-    else:
-        new_df = pd.DataFrame(columns=['id', 'course_title', 'start_date', 'end_date', 'size'])
-    
-    # Identify added classes
-    if not original_df.empty and not new_df.empty:
-        original_ids = set(original_df['id'])
-        new_ids = set(new_df['id'])
+    try:
+        # Convert to DataFrames
+        if original_schedule:
+            original_df = pd.DataFrame(original_schedule)
+            original_df['start_date'] = pd.to_datetime(original_df['start_date'])
+            original_df['end_date'] = pd.to_datetime(original_df['end_date'])
+        else:
+            original_df = pd.DataFrame(columns=['id', 'course_title', 'start_date', 'end_date', 'size'])
         
-        added_ids = new_ids - original_ids
-        removed_ids = original_ids - new_ids
-        modified_ids = set()
+        if new_schedule:
+            new_df = pd.DataFrame(new_schedule)
+            new_df['start_date'] = pd.to_datetime(new_df['start_date'])
+            new_df['end_date'] = pd.to_datetime(new_df['end_date'])
+        else:
+            new_df = pd.DataFrame(columns=['id', 'course_title', 'start_date', 'end_date', 'size'])
         
-        # Identify modified classes
-        for class_id in original_ids & new_ids:
+        # Identify added classes
+        if not original_df.empty and not new_df.empty:
+            original_ids = set(original_df['id'])
+            new_ids = set(new_df['id'])
+            added_ids = new_ids - original_ids
+            removed_ids = original_ids - new_ids
+            modified_ids = set()
+            
+            # Identify modified classes
+            for class_id in original_ids & new_ids:
+                original_class = original_df[original_df['id'] == class_id].iloc[0]
+                new_class = new_df[new_df['id'] == class_id].iloc[0]
+                
+                # Check if any key attributes changed
+                if (original_class['start_date'] != new_class['start_date'] or
+                    original_class['end_date'] != new_class['end_date'] or
+                    original_class['size'] != new_class['size']):
+                    modified_ids.add(class_id)
+        else:
+            # If either schedule is empty, all classes are added or removed
+            added_ids = set(new_df['id']) if not new_df.empty else set()
+            removed_ids = set(original_df['id']) if not original_df.empty else set()
+            modified_ids = set()
+        
+        # Create detailed change records
+        added_classes = []
+        removed_classes = []
+        modified_classes = []
+        
+        for class_id in added_ids:
+            new_class = new_df[new_df['id'] == class_id].iloc[0]
+            added_classes.append({
+                'id': int(class_id),
+                'course_title': new_class['course_title'],
+                'start_date': new_class['start_date'].strftime('%Y-%m-%d'),
+                'end_date': new_class['end_date'].strftime('%Y-%m-%d'),
+                'size': int(new_class['size'])
+            })
+        
+        for class_id in removed_ids:
+            original_class = original_df[original_df['id'] == class_id].iloc[0]
+            removed_classes.append({
+                'id': int(class_id),
+                'course_title': original_class['course_title'],
+                'start_date': original_class['start_date'].strftime('%Y-%m-%d'),
+                'end_date': original_class['end_date'].strftime('%Y-%m-%d'),
+                'size': int(original_class['size'])
+            })
+        
+        for class_id in modified_ids:
             original_class = original_df[original_df['id'] == class_id].iloc[0]
             new_class = new_df[new_df['id'] == class_id].iloc[0]
-            
-            # Check if any key attributes changed
-            if (original_class['start_date'] != new_class['start_date'] or
-                original_class['end_date'] != new_class['end_date'] or
-                original_class['size'] != new_class['size']):
-                modified_ids.add(class_id)
-    else:
-        # If either schedule is empty, all classes are added or removed
-        added_ids = set(new_df['id']) if not new_df.empty else set()
-        removed_ids = set(original_df['id']) if not original_df.empty else set()
-        modified_ids = set()
-    
-    # Create detailed change records
-    added_classes = []
-    removed_classes = []
-    modified_classes = []
-    
-    for class_id in added_ids:
-        new_class = new_df[new_df['id'] == class_id].iloc[0]
-        added_classes.append({
-            'id': int(class_id),
-            'course_title': new_class['course_title'],
-            'start_date': new_class['start_date'].strftime('%Y-%m-%d'),
-            'end_date': new_class['end_date'].strftime('%Y-%m-%d'),
-            'size': int(new_class['size'])
-        })
-    
-    for class_id in removed_ids:
-        original_class = original_df[original_df['id'] == class_id].iloc[0]
-        removed_classes.append({
-            'id': int(class_id),
-            'course_title': original_class['course_title'],
-            'start_date': original_class['start_date'].strftime('%Y-%m-%d'),
-            'end_date': original_class['end_date'].strftime('%Y-%m-%d'),
-            'size': int(original_class['size'])
-        })
-    
-    for class_id in modified_ids:
-        original_class = original_df[original_df['id'] == class_id].iloc[0]
-        new_class = new_df[new_df['id'] == class_id].iloc[0]
+            modified_classes.append({
+                'id': int(class_id),
+                'course_title': new_class['course_title'],
+                'original_start': original_class['start_date'].strftime('%Y-%m-%d'),
+                'original_end': original_class['end_date'].strftime('%Y-%m-%d'),
+                'original_size': int(original_class['size']),
+                'new_start': new_class['start_date'].strftime('%Y-%m-%d'),
+                'new_end': new_class['end_date'].strftime('%Y-%m-%d'),
+                'new_size': int(new_class['size'])
+            })
         
-        modified_classes.append({
-            'id': int(class_id),
-            'course_title': new_class['course_title'],
-            'original_start': original_class['start_date'].strftime('%Y-%m-%d'),
-            'original_end': original_class['end_date'].strftime('%Y-%m-%d'),
-            'original_size': int(original_class['size']),
-            'new_start': new_class['start_date'].strftime('%Y-%m-%d'),
-            'new_end': new_class['end_date'].strftime('%Y-%m-%d'),
-            'new_size': int(new_class['size'])
-        })
-    
-    # Calculate summary metrics
-    original_metrics = {
-        'total_classes': len(original_df),
-        'total_seats': original_df['size'].sum() if not original_df.empty else 0
-    }
-    
-    new_metrics = {
-        'total_classes': len(new_df),
-        'total_seats': new_df['size'].sum() if not new_df.empty else 0
-    }
-    
-    return {
-        'added_classes': added_classes,
-        'removed_classes': removed_classes,
-        'modified_classes': modified_classes,
-        'original_metrics': original_metrics,
-        'new_metrics': new_metrics,
-        'net_change_classes': new_metrics['total_classes'] - original_metrics['total_classes'],
-        'net_change_seats': new_metrics['total_seats'] - original_metrics['total_seats']
-    }
+        # Calculate summary metrics
+        original_metrics = {
+            'total_classes': len(original_df),
+            'total_seats': original_df['size'].sum() if not original_df.empty else 0
+        }
+        
+        new_metrics = {
+            'total_classes': len(new_df),
+            'total_seats': new_df['size'].sum() if not new_df.empty else 0
+        }
+        
+        return {
+            'added_classes': added_classes,
+            'removed_classes': removed_classes,
+            'modified_classes': modified_classes,
+            'original_metrics': original_metrics,
+            'new_metrics': new_metrics,
+            'net_change_classes': new_metrics['total_classes'] - original_metrics['total_classes'],
+            'net_change_seats': new_metrics['total_seats'] - original_metrics['total_seats']
+        }
+    except Exception as e:
+        print(f"Error comparing schedules: {e}")
+        return {
+            'added_classes': [],
+            'removed_classes': [],
+            'modified_classes': [],
+            'original_metrics': {'total_classes': 0, 'total_seats': 0},
+            'new_metrics': {'total_classes': 0, 'total_seats': 0},
+            'net_change_classes': 0,
+            'net_change_seats': 0,
+            'error': str(e)
+        }
 
 def json_serializer(obj):
     """
     Custom JSON serializer for objects not serializable by default json code
-    
     Args:
         obj: Python object to serialize
-        
     Returns:
         JSON serializable object
     """
@@ -810,6 +1273,143 @@ def json_serializer(obj):
         return obj.isoformat()
     if isinstance(obj, pd.Timestamp):
         return obj.isoformat()
-    
     # For anything else that's not JSON serializable
     return str(obj)
+
+def suggest_schedule_improvements(schedule, bottlenecks=None):
+    """
+    Suggest potential improvements to a schedule based on common patterns
+    
+    Args:
+        schedule (list): List of class dictionaries
+        bottlenecks (list, optional): List of bottleneck courses with wait times
+        
+    Returns:
+        list: Suggestions for schedule improvements
+    """
+    suggestions = []
+    
+    # Handle empty schedule
+    if not schedule:
+        return ["Add classes to the schedule to begin optimization."]
+    
+    try:
+        # Convert to DataFrame
+        schedule_df = pd.DataFrame(schedule)
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+        
+        # Group by course
+        course_groups = schedule_df.groupby('course_title')
+        
+        # Check for courses with few classes
+        for course, group in course_groups:
+            if len(group) == 1:
+                suggestions.append(f"Consider adding more {course} classes as there is currently only one.")
+        
+        # Check for large gaps between classes
+        for course, group in course_groups:
+            if len(group) >= 2:
+                sorted_group = group.sort_values('start_date')
+                for i in range(len(sorted_group) - 1):
+                    gap = (sorted_group.iloc[i+1]['start_date'] - sorted_group.iloc[i]['end_date']).days
+                    if gap > 60:
+                        suggestions.append(
+                            f"Large gap of {gap} days between {course} classes ending {sorted_group.iloc[i]['end_date'].strftime('%Y-%m-%d')} " +
+                            f"and starting {sorted_group.iloc[i+1]['start_date'].strftime('%Y-%m-%d')}."
+                        )
+        
+        # Use bottleneck information if provided
+        if bottlenecks:
+            for bottleneck in bottlenecks:
+                course = bottleneck.get('course')
+                wait_time = bottleneck.get('wait_time')
+                if course and wait_time and wait_time > 10:
+                    course_classes = schedule_df[schedule_df['course_title'] == course]
+                    if len(course_classes) < 3:
+                        suggestions.append(f"Consider adding more {course} classes to reduce the {wait_time:.1f} day wait time.")
+                    else:
+                        suggestions.append(f"Consider increasing capacity for {course} classes to reduce the {wait_time:.1f} day wait time.")
+        
+        # Check for overlapping classes that might cause resource conflicts
+        conflicts = calculate_class_conflicts(schedule)
+        if conflicts:
+            suggestions.append(f"Found {len(conflicts)} potential class conflicts. Consider adjusting dates to reduce overlaps.")
+        
+        # Check MOS allocations
+        total_mos_allocation = {
+            '18A': 0,
+            '18B': 0,
+            '18C': 0,
+            '18D': 0,
+            '18E': 0
+        }
+        
+        for class_info in schedule:
+            if 'mos_allocation' in class_info and class_info['mos_allocation']:
+                for mos, count in class_info['mos_allocation'].items():
+                    if mos in total_mos_allocation:
+                        total_mos_allocation[mos] += count
+        
+        # Check for imbalanced MOS allocations
+        total_allocated = sum(total_mos_allocation.values())
+        if total_allocated > 0:
+            for mos, count in total_mos_allocation.items():
+                percentage = count / total_allocated
+                if percentage < 0.1:
+                    suggestions.append(f"Low allocation for {mos} ({percentage:.1%} of total). Consider increasing seats for this MOS.")
+                elif percentage > 0.3:
+                    suggestions.append(f"High allocation for {mos} ({percentage:.1%} of total). Consider if this matches your training needs.")
+    except Exception as e:
+        suggestions.append(f"Error analyzing schedule for improvements: {e}")
+    
+    return suggestions
+
+def check_prerequisite_order(schedule, course_configs):
+    """
+    Check if the schedule respects prerequisite ordering
+    
+    Args:
+        schedule (list): List of class dictionaries
+        course_configs (dict): Dictionary of course configurations
+        
+    Returns:
+        list: Violations of prerequisite ordering
+    """
+    violations = []
+    
+    # Handle empty schedule
+    if not schedule:
+        return violations
+    
+    try:
+        schedule_df = pd.DataFrame(schedule)
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+        
+        # For each course, check if prerequisites start before it
+        for _, class_info in schedule_df.iterrows():
+            course = class_info['course_title']
+            if course not in course_configs:
+                continue
+                
+            start_date = class_info['start_date']
+            prereqs = get_prerequisites(course_configs, course)
+            
+            for prereq in prereqs:
+                # Find all classes for this prerequisite
+                prereq_classes = schedule_df[schedule_df['course_title'] == prereq]
+                if len(prereq_classes) == 0:
+                    violations.append(f"Prerequisite {prereq} for {course} is not scheduled at all.")
+                    continue
+                    
+                # Check if at least one prerequisite class ends before this course starts
+                if not any(prereq_classes['end_date'] < start_date):
+                    violations.append(
+                        f"No {prereq} class ends before {course} starts on {start_date.strftime('%Y-%m-%d')}, " +
+                        f"but {prereq} is a prerequisite for {course}."
+                    )
+    except Exception as e:
+        violations.append(f"Error checking prerequisite order: {e}")
+                    
+    return violations

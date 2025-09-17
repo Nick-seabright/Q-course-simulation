@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from collections import defaultdict
+import streamlit as st
 
 """
 Data Processing Module Training Schedule Optimizer
@@ -29,13 +30,25 @@ RES STAT:
 - W = WAITING FOR RESERVATION
 """
 
+def safe_st_warning(message):
+    """Safe wrapper for st.warning that handles case where streamlit isn't available"""
+    try:
+        st.warning(message)
+    except:
+        print(f"WARNING: {message}")
+
+def safe_st_error(message):
+    """Safe wrapper for st.error that handles case where streamlit isn't available"""
+    try:
+        st.error(message)
+    except:
+        print(f"ERROR: {message}")
+
 def process_data(raw_data):
     """
     Process raw training data to extract relevant information
-    
     Args:
         raw_data (pd.DataFrame): Raw training data
-    
     Returns:
         pd.DataFrame: Processed data
     """
@@ -45,10 +58,9 @@ def process_data(raw_data):
     # Check for required columns
     required_columns = ['FY', 'Course Title', 'SSN', 'Cls Start Date', 'Cls End Date']
     missing_columns = [col for col in required_columns if col not in data.columns]
-    
     if missing_columns:
         error_msg = f"Missing required columns: {', '.join(missing_columns)}"
-        st.error(error_msg)
+        safe_st_error(error_msg)
         raise ValueError(error_msg)
     
     # Convert date columns to datetime - use column names, not positions
@@ -70,14 +82,13 @@ def process_data(raw_data):
         if 'Arrival Date' not in data.columns:
             # Create the column
             data['Arrival Date'] = pd.NaT
-            st.warning("Arrival Date column not found. Estimating arrival as 3 weeks before each student's first class.")
+            safe_st_warning("Arrival Date column not found. Estimating arrival as 3 weeks before each student's first class.")
         
         # Process each student
         for ssn, student_data in student_groups:
             # Sort by class start date to find first class
             if 'Cls Start Date' in student_data.columns:
                 sorted_classes = student_data.sort_values('Cls Start Date')
-                
                 if len(sorted_classes) > 0:
                     first_class_start = sorted_classes.iloc[0]['Cls Start Date']
                     
@@ -87,11 +98,11 @@ def process_data(raw_data):
                         if pd.isna(data.loc[idx, 'Arrival Date']) or data.loc[idx, 'Arrival Date'] > data.loc[idx, 'Cls Start Date']:
                             # Set arrival date to 3 weeks (21 days) before first class
                             data.loc[idx, 'Arrival Date'] = first_class_start - pd.Timedelta(days=21)
-    
+        
         # Perform a final check to ensure all arrival dates are before class start dates
         invalid_arrivals = data[data['Arrival Date'] > data['Cls Start Date']]
         if len(invalid_arrivals) > 0:
-            st.warning(f"Found {len(invalid_arrivals)} records with arrival dates after class start dates. These have been corrected.")
+            safe_st_warning(f"Found {len(invalid_arrivals)} records with arrival dates after class start dates. These have been corrected.")
             # Fix any remaining invalid arrival dates
             data.loc[invalid_arrivals.index, 'Arrival Date'] = data.loc[invalid_arrivals.index, 'Cls Start Date'] - pd.Timedelta(days=1)
         
@@ -102,7 +113,6 @@ def process_data(raw_data):
     data['Duration'] = (data['Cls End Date'] - data['Cls Start Date']).dt.days
     
     # Determine student status based on the correct status codes
-    
     # Determine if a student started a class (I=New Input, J=Retrainee In, Q=Recycle In)
     if 'Input Stat' in data.columns:
         data['Started'] = data['Input Stat'].isin(['I', 'J', 'Q'])
@@ -165,7 +175,6 @@ def process_data(raw_data):
 def process_training_mos(data):
     """
     Process Training MOS data, inferring it if not explicitly provided
-    
     Args:
         data (pd.DataFrame): Training data to process
     """
@@ -187,7 +196,6 @@ def process_training_mos(data):
             for idx, row in data.iterrows():
                 if pd.isna(data.loc[idx, 'TrainingMOS']) and data.loc[idx, 'PersonnelType'] == 'Enlisted':
                     course_title = str(row.get('Course Title', '')).upper()
-                    
                     if 'WEAPONS' in course_title or 'WEAP SGT' in course_title:
                         data.loc[idx, 'TrainingMOS'] = '18B'
                     elif 'ENGINEER' in course_title or 'ENG SGT' in course_title:
@@ -200,54 +208,51 @@ def process_training_mos(data):
 def analyze_historical_data(processed_data):
     """
     Analyze historical training data to extract statistics by course
-    
     Args:
         processed_data (pd.DataFrame): Processed training data
-    
     Returns:
         dict: Dictionary of course statistics
     """
     # Group by course title
     grouped_data = processed_data.groupby('Course Title')
-    
     course_stats = {}
     
     for course, group in grouped_data:
         # Skip courses with very few entries
         if len(group) < 3:
             continue
-            
+        
         # Calculate pass rate (G=Graduate)
         if group['Started'].sum() > 0:
             pass_rate = group['Graduated'].sum() / group['Started'].sum()
         else:
             pass_rate = 0
-            
+        
         # Calculate recycle rate (L=Recycle Out)
         if group['Started'].sum() > 0:
             recycle_rate = group['Recycled'].sum() / group['Started'].sum()
         else:
             recycle_rate = 0
-            
+        
         # Calculate no-show rate (N=No Show)
         reservation_count = len(group)
         if reservation_count > 0:
             no_show_rate = group['NoShow'].sum() / reservation_count
         else:
             no_show_rate = 0
-            
+        
         # Calculate cancellation rate (C=Cancelled Reservation)
         if reservation_count > 0:
             cancellation_rate = group['Cancelled'].sum() / reservation_count
         else:
             cancellation_rate = 0
-            
+        
         # Calculate failure rate (Z=Non-Successful Completion)
         if group['Started'].sum() > 0:
             failure_rate = group['Failed'].sum() / group['Started'].sum()
         else:
             failure_rate = 0
-            
+        
         # Calculate average class size
         classes = group.groupby(['CLS', 'Cls Start Date'])
         class_sizes = classes.size().values
@@ -255,7 +260,7 @@ def analyze_historical_data(processed_data):
             avg_class_size = int(np.mean(class_sizes))
         else:
             avg_class_size = 0
-            
+        
         # Calculate average duration
         avg_duration = group['Duration'].mean()
         
@@ -267,11 +272,10 @@ def analyze_historical_data(processed_data):
             classes_per_year = int(fy_classes.mean())
         else:
             classes_per_year = 0
-            
+        
         # Personnel composition
         officer_count = (group['PersonnelType'] == 'Officer').sum()
         enlisted_count = (group['PersonnelType'] == 'Enlisted').sum()
-        
         total = officer_count + enlisted_count
         if total > 0:
             officer_ratio = officer_count / total
@@ -279,7 +283,7 @@ def analyze_historical_data(processed_data):
         else:
             officer_ratio = 0
             enlisted_ratio = 0
-            
+        
         # Group type composition
         group_counts = group['GroupType'].value_counts()
         total_students = group_counts.sum()
@@ -314,10 +318,8 @@ def analyze_historical_data(processed_data):
 def extract_historical_arrival_patterns(processed_data):
     """
     Extract historical student arrival patterns from processed data
-    
     Args:
         processed_data (pd.DataFrame): Processed training data
-    
     Returns:
         dict: Dictionary of arrival patterns
     """
@@ -336,7 +338,7 @@ def extract_historical_arrival_patterns(processed_data):
         valid_data = processed_data.dropna(subset=['Days Before Class'])
         valid_data['days_before'] = valid_data['Days Before Class']
         valid_arrivals = valid_data[(valid_data['days_before'] >= 0) & (valid_data['days_before'] <= 90)]
-        
+    
     if len(valid_arrivals) == 0:
         return None
     
@@ -360,47 +362,47 @@ def extract_historical_arrival_patterns(processed_data):
 def extract_historical_mos_distribution(processed_data):
     """
     Extract historical MOS distribution from processed data
-    
     Args:
         processed_data (pd.DataFrame): Processed training data
-    
     Returns:
         dict: Dictionary of MOS distribution
     """
+    # Define the MOS column to use
+    mos_column = None
+    
     # Check if MOS column exists (might be called "Training MOS" or similar)
     if 'TrainingMOS' in processed_data.columns:
         mos_column = 'TrainingMOS'
     else:
         # Try to find another suitable column
         possible_columns = ['Training MOS', 'MOS', 'TrainingMOS', 'TMOS']
-        
         for col in possible_columns:
             if col in processed_data.columns:
                 mos_column = col
                 break
-        
-        if not mos_column:
-            # If no explicit MOS column, try to infer from other data
-            # For example, Officers (CP Pers Type = 'O') might be 18A
-            if 'CP Pers Type' in processed_data.columns:
-                # Create synthetic MOS distribution based on personnel type
-                officers = (processed_data['CP Pers Type'] == 'O').sum()
-                enlisted = (processed_data['CP Pers Type'] == 'E').sum()
-                total = officers + enlisted
-                
-                if total > 0:
-                    # Officers are 18A, distribute enlisted evenly among other MOS
-                    mos_distribution = {
-                        '18A': officers / total,
-                        '18B': enlisted / total / 4,
-                        '18C': enlisted / total / 4,
-                        '18D': enlisted / total / 4,
-                        '18E': enlisted / total / 4
-                    }
-                    return mos_distribution
+    
+    # If no explicit MOS column found, try to infer from other data
+    if not mos_column:
+        # For example, Officers (CP Pers Type = 'O') might be 18A
+        if 'CP Pers Type' in processed_data.columns:
+            # Create synthetic MOS distribution based on personnel type
+            officers = (processed_data['CP Pers Type'] == 'O').sum()
+            enlisted = (processed_data['CP Pers Type'] == 'E').sum()
+            total = officers + enlisted
             
-            # Default distribution if we can't extract from data
-            return {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+            if total > 0:
+                # Officers are 18A, distribute enlisted evenly among other MOS
+                mos_distribution = {
+                    '18A': officers / total,
+                    '18B': enlisted / total / 4,
+                    '18C': enlisted / total / 4,
+                    '18D': enlisted / total / 4,
+                    '18E': enlisted / total / 4
+                }
+                return mos_distribution
+            
+        # Default distribution if we can't extract from data
+        return {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
     
     # If we have an MOS column, calculate the distribution
     mos_counts = processed_data[mos_column].value_counts()
@@ -416,7 +418,6 @@ def extract_historical_mos_distribution(processed_data):
     }
     
     mos_distribution = {}
-    
     for mos, count in mos_counts.items():
         # Try to map the MOS to standard code
         standard_mos = mos
@@ -460,10 +461,8 @@ def extract_historical_mos_distribution(processed_data):
 def infer_prerequisites(processed_data):
     """
     Infer potential prerequisites based on historical student progression
-    
     Args:
         processed_data (pd.DataFrame): Processed training data
-    
     Returns:
         dict: Dictionary of likely prerequisites for each course
     """
@@ -472,7 +471,6 @@ def infer_prerequisites(processed_data):
     
     # Track course sequences
     course_sequences = {}
-    
     for ssn, student_data in student_groups:
         # Only consider graduated courses
         completed_courses = student_data[student_data['Graduated']].sort_values('Cls Start Date')
@@ -480,7 +478,7 @@ def infer_prerequisites(processed_data):
         # Skip if student completed fewer than 2 courses
         if len(completed_courses) < 2:
             continue
-            
+        
         # Get course sequence
         course_sequence = completed_courses['Course Title'].tolist()
         
@@ -489,7 +487,7 @@ def infer_prerequisites(processed_data):
             current_course = course_sequence[i]
             if current_course not in course_sequences:
                 course_sequences[current_course] = {}
-                
+            
             # Count all previous courses as potential prerequisites
             for j in range(i):
                 prev_course = course_sequence[j]
@@ -550,10 +548,8 @@ def infer_prerequisites(processed_data):
 def infer_mos_paths(processed_data):
     """
     Infer MOS-specific training paths from historical data
-    
     Args:
         processed_data (pd.DataFrame): Processed training data
-    
     Returns:
         dict: Dictionary of course to MOS path mappings
     """
@@ -571,7 +567,7 @@ def infer_mos_paths(processed_data):
     
     # Calculate percentage of each MOS in each course
     course_mos_counts['percentage'] = course_mos_counts.apply(
-        lambda row: row['count'] / course_totals[row['Course Title']] if row['Course Title'] in course_totals else 0, 
+        lambda row: row['count'] / course_totals[row['Course Title']] if row['Course Title'] in course_totals else 0,
         axis=1
     )
     
@@ -591,8 +587,7 @@ def infer_mos_paths(processed_data):
             mos_data = course_data[course_data['TrainingMOS'] == mos]
             if not mos_data.empty:
                 percentage = mos_data.iloc[0]['percentage']
-                
-                # If more than 10% of students with this MOS take this course, 
+                # If more than 10% of students with this MOS take this course,
                 # consider it part of this MOS path
                 if percentage >= 0.1:
                     mos_paths[course][mos] = True
@@ -616,10 +611,8 @@ def infer_mos_paths(processed_data):
 def analyze_student_progression(processed_data):
     """
     Analyze student progression through courses over time
-    
     Args:
         processed_data (pd.DataFrame): Processed training data
-    
     Returns:
         dict: Dictionary of progression metrics
     """
@@ -654,7 +647,6 @@ def analyze_student_progression(processed_data):
                 prev_end = sorted_courses.iloc[i-1]['Cls End Date']
                 curr_start = sorted_courses.iloc[i]['Cls Start Date']
                 wait_time = (curr_start - prev_end).days
-                
                 # Only count positive wait times
                 if wait_time > 0:
                     wait_times.append({
@@ -720,3 +712,96 @@ def analyze_student_progression(processed_data):
         'bottlenecks': bottlenecks,
         'common_paths': common_paths[:10]  # Top 10 most common paths
     }
+
+def extract_current_students_from_history(processed_data, cutoff_date=None):
+    """
+    Extract students currently in the training pipeline from historical data
+    
+    Args:
+        processed_data (pd.DataFrame): Processed historical training data
+        cutoff_date (datetime, optional): Date to use as "now" for determining current students
+        
+    Returns:
+        list: List of student objects with their current state
+    """
+    # Import here to avoid circular imports
+    from simulation_engine import Student
+    
+    if cutoff_date is None:
+        # Use the latest date in the data as the cutoff if not specified
+        cutoff_date = processed_data['Cls End Date'].max()
+    
+    # Group by student
+    student_groups = processed_data.groupby('SSN')
+    
+    current_students = []
+    student_id = 0
+    
+    for ssn, student_data in student_groups:
+        # Sort courses by date
+        student_courses = student_data.sort_values('Cls Start Date')
+        
+        # Skip students who have fully completed training
+        if student_courses['Graduated'].all():
+            continue
+            
+        # Find the student's current status
+        completed_courses = []
+        current_course = None
+        current_class_end = None
+        waiting_for = None
+        
+        for _, course_data in student_courses.iterrows():
+            course_title = course_data['Course Title']
+            start_date = course_data['Cls Start Date']
+            end_date = course_data['Cls End Date']
+            
+            # If this course ended before the cutoff, mark as completed if graduated
+            if end_date < cutoff_date and course_data['Graduated']:
+                completed_courses.append(course_title)
+            
+            # If this course spans the cutoff date, it's the current course
+            elif start_date <= cutoff_date and end_date >= cutoff_date:
+                current_course = course_title
+                current_class_end = end_date
+                
+            # If this course starts after cutoff, it's a future course
+            elif start_date > cutoff_date:
+                # Student might be waiting for this course
+                if not current_course and not waiting_for:
+                    waiting_for = course_title
+        
+        # If student has completed courses or is in a course, add to current students
+        if completed_courses or current_course or waiting_for:
+            # Extract student details
+            training_mos = student_data['TrainingMOS'].iloc[0] if 'TrainingMOS' in student_data.columns else None
+            personnel_type = student_data['PersonnelType'].iloc[0] if 'PersonnelType' in student_data.columns else 'Enlisted'
+            group_type = student_data['GroupType'].iloc[0] if 'GroupType' in student_data.columns else 'ADE'
+            
+            # Get earliest arrival date
+            arrival_date = student_data['Arrival Date'].min() if 'Arrival Date' in student_data.columns else student_courses['Cls Start Date'].min()
+            
+            # Create student object with current state
+            student = Student(
+                id=student_id,
+                entry_time=student_courses['Cls Start Date'].min(),
+                arrival_date=arrival_date,
+                personnel_type=personnel_type,
+                group_type=group_type,
+                training_mos=training_mos
+            )
+            
+            # Set student's state
+            student.completed_courses = completed_courses
+            
+            if current_course:
+                student.current_course = current_course
+                student.current_class_end = current_class_end
+                student.record_status_change('in_class', cutoff_date, current_course)
+            elif waiting_for:
+                student.start_waiting(waiting_for, cutoff_date)
+            
+            current_students.append(student)
+            student_id += 1
+    
+    return current_students

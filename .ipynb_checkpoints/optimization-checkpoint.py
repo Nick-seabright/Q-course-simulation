@@ -8,7 +8,6 @@ from simulation_engine import run_simulation
 def optimize_schedule(inputs):
     """
     Optimize training schedule based on simulation results
-    
     Args:
         inputs (dict): Optimization inputs
             - current_schedule: Current schedule
@@ -22,7 +21,6 @@ def optimize_schedule(inputs):
             - allow_duration_changes: Whether to allow duration changes
             - allow_prerequisite_changes: Whether to allow prerequisite changes
             - allow_mos_allocation_changes: Whether to allow MOS allocation changes
-    
     Returns:
         dict: Optimization results
     """
@@ -63,9 +61,9 @@ def optimize_schedule(inputs):
     else:
         # Default to a balanced approach
         optimization_fn = lambda metrics: (
-            -0.3 * metrics['completion_time'] + 
-            0.3 * metrics['throughput'] - 
-            0.2 * metrics['wait_time'] + 
+            -0.3 * metrics['completion_time'] +
+            0.3 * metrics['throughput'] -
+            0.2 * metrics['wait_time'] +
             0.2 * metrics['utilization']
         )
     
@@ -77,6 +75,9 @@ def optimize_schedule(inputs):
     prerequisite_changes = []
     mos_allocation_changes = []
     other_recommendations = []
+    
+    # Track optimization progress
+    progress_updates = []
     
     # Extract bottlenecks from simulation results
     bottlenecks = {b['course']: b['wait_time'] for b in simulation_results['bottlenecks']}
@@ -99,8 +100,10 @@ def optimize_schedule(inputs):
         candidate_schedule = copy.deepcopy(best_schedule)
         candidate_configs = copy.deepcopy(best_course_configs)
         
-        # Choose an optimization strategy based on iteration
-        strategy = i % 5  # Use 5 strategies with MOS allocation
+        # Choose an optimization strategy based on problem characteristics
+        strategy = select_optimization_strategy(i, bottlenecks, low_utilization_courses, 
+                                             allow_capacity_changes, allow_duration_changes,
+                                             allow_prerequisite_changes, allow_mos_allocation_changes)
         
         if strategy == 0:
             # Strategy 1: Adjust class dates for bottleneck courses
@@ -110,7 +113,7 @@ def optimize_schedule(inputs):
         
         elif strategy == 1 and allow_capacity_changes:
             # Strategy 2: Adjust class capacities
-            changes = adjust_class_capacities(candidate_schedule, candidate_configs, 
+            changes = adjust_class_capacities(candidate_schedule, candidate_configs,
                                              bottlenecks, low_utilization_courses, mos_bottlenecks)
             if changes:
                 capacity_changes.extend(changes)
@@ -120,7 +123,6 @@ def optimize_schedule(inputs):
             changes = adjust_class_frequency(candidate_schedule, bottlenecks, low_utilization_courses)
             if changes:
                 schedule_changes.extend(changes)
-                
                 # Update other recommendations
                 for change in changes:
                     if change.get('action') == 'add':
@@ -153,25 +155,38 @@ def optimize_schedule(inputs):
             'num_iterations': 3    # Fewer iterations for speed during optimization
         }
         
-        candidate_results = run_simulation(simulation_inputs)
-        
-        # Extract metrics
-        candidate_metrics = {
-            'completion_time': candidate_results['avg_completion_time'],
-            'wait_time': candidate_results['avg_wait_time'],
-            'throughput': candidate_results['throughput'],
-            'utilization': candidate_results['resource_utilization']
-        }
-        
-        # Calculate score
-        candidate_score = optimization_fn(candidate_metrics)
-        
-        # Check if candidate is better
-        if candidate_score > best_score:
-            best_schedule = candidate_schedule
-            best_course_configs = candidate_configs
-            best_metrics = candidate_metrics
-            best_score = candidate_score
+        try:
+            candidate_results = run_simulation(simulation_inputs)
+            
+            # Extract metrics
+            candidate_metrics = {
+                'completion_time': candidate_results['avg_completion_time'],
+                'wait_time': candidate_results['avg_wait_time'],
+                'throughput': candidate_results['throughput'],
+                'utilization': candidate_results['resource_utilization']
+            }
+            
+            # Calculate score
+            candidate_score = optimization_fn(candidate_metrics)
+            
+            # Check if candidate is better
+            if candidate_score > best_score:
+                best_schedule = candidate_schedule
+                best_course_configs = candidate_configs
+                best_metrics = candidate_metrics
+                best_score = candidate_score
+                
+                # Record progress
+                progress_updates.append({
+                    'iteration': i,
+                    'strategy': strategy,
+                    'improvement': candidate_score - best_score,
+                    'metrics': candidate_metrics.copy()
+                })
+        except Exception as e:
+            print(f"Error during simulation in optimization iteration {i}: {e}")
+            # Continue to next iteration
+            continue
     
     # Run final simulation with best schedule
     final_simulation_inputs = {
@@ -182,31 +197,65 @@ def optimize_schedule(inputs):
         'num_iterations': 5
     }
     
-    final_results = run_simulation(final_simulation_inputs)
-    
-    # Calculate metrics improvements
-    metrics_comparison = {
-        'completion_time': {
-            'original': simulation_results['avg_completion_time'],
-            'optimized': final_results['avg_completion_time'],
-            'improvement': simulation_results['avg_completion_time'] - final_results['avg_completion_time']
-        },
-        'wait_time': {
-            'original': simulation_results['avg_wait_time'],
-            'optimized': final_results['avg_wait_time'],
-            'improvement': simulation_results['avg_wait_time'] - final_results['avg_wait_time']
-        },
-        'throughput': {
-            'original': simulation_results['throughput'],
-            'optimized': final_results['throughput'],
-            'improvement': final_results['throughput'] - simulation_results['throughput']
-        },
-        'utilization': {
-            'original': simulation_results['resource_utilization'],
-            'optimized': final_results['resource_utilization'],
-            'improvement': final_results['resource_utilization'] - simulation_results['resource_utilization']
+    try:
+        final_results = run_simulation(final_simulation_inputs)
+        
+        # Calculate metrics improvements
+        metrics_comparison = {
+            'completion_time': {
+                'original': simulation_results['avg_completion_time'],
+                'optimized': final_results['avg_completion_time'],
+                'improvement': simulation_results['avg_completion_time'] - final_results['avg_completion_time']
+            },
+            'wait_time': {
+                'original': simulation_results['avg_wait_time'],
+                'optimized': final_results['avg_wait_time'],
+                'improvement': simulation_results['avg_wait_time'] - final_results['avg_wait_time']
+            },
+            'throughput': {
+                'original': simulation_results['throughput'],
+                'optimized': final_results['throughput'],
+                'improvement': final_results['throughput'] - simulation_results['throughput']
+            },
+            'utilization': {
+                'original': simulation_results['resource_utilization'],
+                'optimized': final_results['resource_utilization'],
+                'improvement': final_results['resource_utilization'] - simulation_results['resource_utilization']
+            }
         }
-    }
+    except Exception as e:
+        print(f"Error during final simulation in optimization: {e}")
+        # If final simulation fails, use best metrics from iterations
+        metrics_comparison = {
+            'completion_time': {
+                'original': simulation_results['avg_completion_time'],
+                'optimized': best_metrics['completion_time'],
+                'improvement': simulation_results['avg_completion_time'] - best_metrics['completion_time']
+            },
+            'wait_time': {
+                'original': simulation_results['avg_wait_time'],
+                'optimized': best_metrics['wait_time'],
+                'improvement': simulation_results['avg_wait_time'] - best_metrics['wait_time']
+            },
+            'throughput': {
+                'original': simulation_results['throughput'],
+                'optimized': best_metrics['throughput'],
+                'improvement': best_metrics['throughput'] - simulation_results['throughput']
+            },
+            'utilization': {
+                'original': simulation_results['resource_utilization'],
+                'optimized': best_metrics['utilization'],
+                'improvement': best_metrics['utilization'] - simulation_results['resource_utilization']
+            }
+        }
+        final_results = {
+            'avg_completion_time': best_metrics['completion_time'],
+            'avg_wait_time': best_metrics['wait_time'],
+            'throughput': best_metrics['throughput'],
+            'resource_utilization': best_metrics['utilization'],
+            'bottlenecks': simulation_results['bottlenecks'],  # Use original bottlenecks
+            'class_utilization': simulation_results['class_utilization']  # Use original utilization
+        }
     
     # Deduplicate and clean up changes
     schedule_changes = deduplicate_changes(schedule_changes)
@@ -225,8 +274,46 @@ def optimize_schedule(inputs):
             'prerequisite_changes': prerequisite_changes,
             'mos_allocation_changes': mos_allocation_changes,
             'other_recommendations': other_recommendations
-        }
+        },
+        'progress_updates': progress_updates
     }
+
+def select_optimization_strategy(iteration, bottlenecks, low_utilization_courses, 
+                               allow_capacity_changes, allow_duration_changes, 
+                               allow_prerequisite_changes, allow_mos_allocation_changes):
+    """
+    Choose optimization strategy based on problem characteristics
+    Args:
+        iteration (int): Current iteration
+        bottlenecks (dict): Dictionary of bottleneck courses with wait times
+        low_utilization_courses (list): List of courses with low utilization
+        allow_capacity_changes (bool): Whether capacity changes are allowed
+        allow_duration_changes (bool): Whether duration changes are allowed
+        allow_prerequisite_changes (bool): Whether prerequisite changes are allowed
+        allow_mos_allocation_changes (bool): Whether MOS allocation changes are allowed
+    Returns:
+        int: Strategy index to use
+    """
+    # If severe bottlenecks exist, prioritize addressing them
+    severe_bottlenecks = [course for course, wait_time in bottlenecks.items() if wait_time > 20]
+    if severe_bottlenecks and iteration < 3:
+        return 0  # Adjust class dates
+    
+    # If many low utilization courses, prioritize capacity adjustments
+    if len(low_utilization_courses) > len(bottlenecks) and allow_capacity_changes and iteration < 5:
+        return 1  # Adjust capacities
+    
+    # Otherwise use round-robin with allowed strategies
+    allowed_strategies = [0]  # Always allow date adjustments
+    if allow_capacity_changes:
+        allowed_strategies.append(1)
+    allowed_strategies.append(2)  # Always allow frequency adjustments
+    if allow_prerequisite_changes:
+        allowed_strategies.append(3)
+    if allow_mos_allocation_changes:
+        allowed_strategies.append(4)
+    
+    return allowed_strategies[iteration % len(allowed_strategies)]
 
 def adjust_class_dates(schedule, bottlenecks):
     """Adjust class dates to reduce bottlenecks"""
@@ -235,9 +322,17 @@ def adjust_class_dates(schedule, bottlenecks):
     # Convert schedule to DataFrame for easier manipulation
     schedule_df = pd.DataFrame(schedule)
     
+    # Handle empty schedule
+    if schedule_df.empty:
+        return changes
+    
     # Convert date strings to datetime
-    schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
-    schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+    try:
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+    except Exception as e:
+        print(f"Error converting dates in adjust_class_dates: {e}")
+        return changes
     
     # Sort by bottleneck severity
     bottleneck_courses = sorted(bottlenecks.items(), key=lambda x: x[1], reverse=True)
@@ -248,7 +343,6 @@ def adjust_class_dates(schedule, bottlenecks):
         
         # Get classes for this course
         course_classes = schedule_df[schedule_df['course_title'] == course].sort_values('start_date')
-        
         if len(course_classes) < 2:
             continue
         
@@ -258,7 +352,6 @@ def adjust_class_dates(schedule, bottlenecks):
             gap_start = course_classes.iloc[i]['end_date']
             gap_end = course_classes.iloc[i+1]['start_date']
             gap_duration = (gap_end - gap_start).days
-            
             if gap_duration > 30:  # Only consider gaps > 30 days
                 class_gaps.append({
                     'start_idx': i,
@@ -318,7 +411,6 @@ def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilizati
         
         # Find classes for this course
         course_classes = [c for c in schedule if c['course_title'] == course]
-        
         if not course_classes:
             continue
         
@@ -348,7 +440,6 @@ def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilizati
                         # If this MOS has high wait times, increase its allocation more
                         mos_wait_time = mos_bottlenecks.get(mos, 0) if mos_bottlenecks else 0
                         mos_increase_pct = min(0.4, (wait_time + mos_wait_time) / 100)
-                        
                         mos_scale = 1 + mos_increase_pct
                         new_count = int(count * mos_scale)
                         new_allocation[mos] = new_count
@@ -368,13 +459,12 @@ def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilizati
                                 [(mos, mos_bottlenecks.get(mos, 0)) for mos in new_allocation],
                                 key=lambda x: x[1], reverse=True
                             )
-                            
                             for i in range(remaining):
                                 if i < len(mos_wait_sorted):
                                     new_allocation[mos_wait_sorted[i][0]] += 1
                             
                             class_info['mos_allocation'] = new_allocation
-                
+            
             # Update class size
             class_info['size'] = new_capacity
         
@@ -401,7 +491,6 @@ def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilizati
         
         # Find classes for this course
         course_classes = [c for c in schedule if c['course_title'] == course]
-        
         if not course_classes:
             continue
         
@@ -473,9 +562,17 @@ def adjust_class_frequency(schedule, bottlenecks, low_utilization_courses):
     # Convert schedule to DataFrame for easier manipulation
     schedule_df = pd.DataFrame(schedule)
     
+    # Handle empty schedule
+    if schedule_df.empty:
+        return changes
+    
     # Convert date strings to datetime
-    schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
-    schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+    try:
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+    except Exception as e:
+        print(f"Error converting dates in adjust_class_frequency: {e}")
+        return changes
     
     # Add classes for bottleneck courses with high wait times
     for course, wait_time in bottlenecks.items():
@@ -484,7 +581,6 @@ def adjust_class_frequency(schedule, bottlenecks, low_utilization_courses):
         
         # Get classes for this course
         course_classes = schedule_df[schedule_df['course_title'] == course].sort_values('start_date')
-        
         if len(course_classes) < 1:
             continue
         
@@ -563,7 +659,6 @@ def adjust_class_frequency(schedule, bottlenecks, low_utilization_courses):
     
     # Remove classes for low utilization courses
     classes_to_remove = []
-    
     for course in low_utilization_courses:
         # Skip if also a bottleneck course
         if course in bottlenecks and bottlenecks[course] > 5:
@@ -571,7 +666,6 @@ def adjust_class_frequency(schedule, bottlenecks, low_utilization_courses):
         
         # Get classes for this course
         course_classes = schedule_df[schedule_df['course_title'] == course].sort_values('start_date')
-        
         if len(course_classes) <= 1:
             # Don't remove if only one class exists
             continue
@@ -611,7 +705,6 @@ def adjust_prerequisites(course_configs, bottlenecks):
         # Check if course has many prerequisites
         if 'prerequisites' in course_configs[course]:
             prerequisites = course_configs[course]['prerequisites'].get('courses', [])
-            
             if len(prerequisites) <= 1:
                 continue
             
@@ -637,7 +730,6 @@ def adjust_prerequisites(course_configs, bottlenecks):
         # Check if course has MOS-specific prerequisites that could be optimized
         if 'mos_paths' in course_configs[course]:
             mos_paths = course_configs[course]['mos_paths']
-            
             for mos, prereqs in mos_paths.items():
                 if len(prereqs) <= 1:
                     continue
@@ -696,7 +788,6 @@ def adjust_mos_allocations(schedule, mos_bottlenecks):
         
         # Determine if this class can help bottlenecked MOS paths
         relevant_mos = [mos for mos in bottleneck_mos if mos in original_allocation]
-        
         if not relevant_mos:
             continue
         
@@ -708,9 +799,8 @@ def adjust_mos_allocations(schedule, mos_bottlenecks):
         for mos, wait_time in sorted_mos:
             if mos not in original_allocation:
                 continue
-                
-            current_allocation = original_allocation[mos]
             
+            current_allocation = original_allocation[mos]
             if mos in bottleneck_mos:
                 # Increase by 10-30% based on wait time
                 increase_pct = min(0.3, wait_time / 50)
@@ -721,13 +811,12 @@ def adjust_mos_allocations(schedule, mos_bottlenecks):
         
         # Adjust to ensure total seats match class size
         new_total = sum(new_allocation.values())
-        
         if new_total > total_size:
             # If over capacity, reduce non-bottlenecked MOS first
             excess = new_total - total_size
             
             # Sort non-bottlenecked MOS by wait time (lowest first)
-            non_bottleneck_mos = [(mos, count) for mos, count in new_allocation.items() 
+            non_bottleneck_mos = [(mos, count) for mos, count in new_allocation.items()
                                  if mos not in bottleneck_mos]
             non_bottleneck_mos.sort(key=lambda x: mos_bottlenecks.get(x[0], 0))
             
@@ -744,7 +833,7 @@ def adjust_mos_allocations(schedule, mos_bottlenecks):
             
             # If still over capacity, reduce bottlenecked MOS starting with lowest wait time
             if excess > 0:
-                bottleneck_mos_list = [(mos, wait_time) for mos, wait_time in sorted_mos 
+                bottleneck_mos_list = [(mos, wait_time) for mos, wait_time in sorted_mos
                                        if mos in bottleneck_mos and mos in new_allocation]
                 
                 # Sort by wait time (lowest first)
@@ -765,7 +854,7 @@ def adjust_mos_allocations(schedule, mos_bottlenecks):
             remaining = total_size - new_total
             
             # Calculate total wait time for bottlenecked MOS
-            total_wait_time = sum(mos_bottlenecks.get(mos, 0) for mos in bottleneck_mos 
+            total_wait_time = sum(mos_bottlenecks.get(mos, 0) for mos in bottleneck_mos
                                  if mos in new_allocation)
             
             if total_wait_time > 0:
@@ -790,6 +879,7 @@ def adjust_mos_allocations(schedule, mos_bottlenecks):
                 for mos in sorted(new_allocation.keys()):
                     new_allocation[mos] += 1
                     remaining -= 1
+                    
                     if remaining <= 0:
                         break
         
@@ -818,7 +908,6 @@ def adjust_mos_allocations(schedule, mos_bottlenecks):
             
             # Add all MOS allocation details
             change.update(change_details)
-            
             changes.append(change)
             
             # Update the class allocation
@@ -845,3 +934,119 @@ def deduplicate_changes(changes):
             unique_changes.append(change)
     
     return unique_changes
+
+def validate_schedule(schedule, course_configs):
+    """
+    Validate a schedule against course configurations and constraints
+    Args:
+        schedule (list): List of class dictionaries
+        course_configs (dict): Dictionary of course configurations
+    Returns:
+        dict: Validation results with issues and warnings
+    """
+    issues = []
+    warnings = []
+    
+    # Check for empty schedule
+    if not schedule:
+        return {
+            'valid': True,
+            'issues': [],
+            'warnings': ["Schedule is empty. No validation performed."]
+        }
+    
+    # Convert schedule to DataFrame
+    try:
+        schedule_df = pd.DataFrame(schedule)
+        schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+        schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+    except Exception as e:
+        return {
+            'valid': False,
+            'issues': [f"Error processing schedule data: {e}"],
+            'warnings': []
+        }
+    
+    # Check for invalid date ranges
+    invalid_dates = schedule_df[schedule_df['start_date'] >= schedule_df['end_date']]
+    for _, row in invalid_dates.iterrows():
+        issues.append(f"Invalid date range for {row['course_title']}: start date is on or after end date")
+    
+    # Check for class overlaps within same course
+    for course, group in schedule_df.groupby('course_title'):
+        if len(group) > 1:
+            # Sort by start date
+            sorted_classes = group.sort_values('start_date')
+            for i in range(len(sorted_classes) - 1):
+                current_end = sorted_classes.iloc[i]['end_date']
+                next_start = sorted_classes.iloc[i+1]['start_date']
+                if current_end >= next_start:
+                    issues.append(
+                        f"Class overlap in {course}: Class ending {current_end.strftime('%Y-%m-%d')} " +
+                        f"overlaps with class starting {next_start.strftime('%Y-%m-%d')}"
+                    )
+    
+    # Check prerequisites
+    for course, config in course_configs.items():
+        # Get all classes for this course
+        course_classes = schedule_df[schedule_df['course_title'] == course]
+        if course_classes.empty:
+            continue
+        
+        # Get prerequisites
+        if 'prerequisites' in config and isinstance(config['prerequisites'], dict):
+            prereqs = config['prerequisites'].get('courses', [])
+            # Check if prerequisites are scheduled before this course
+            for prereq in prereqs:
+                prereq_classes = schedule_df[schedule_df['course_title'] == prereq]
+                if prereq_classes.empty:
+                    warnings.append(f"Prerequisite {prereq} for {course} is not scheduled")
+                    continue
+                
+                # For each class of this course, check if there's a prerequisite class that ends before it starts
+                for _, class_row in course_classes.iterrows():
+                    class_start = class_row['start_date']
+                    valid_prereq_classes = prereq_classes[prereq_classes['end_date'] < class_start]
+                    if valid_prereq_classes.empty:
+                        warnings.append(
+                            f"No {prereq} class ends before {course} class starting on {class_start.strftime('%Y-%m-%d')}"
+                        )
+    
+    # Check MOS allocations
+    for _, row in schedule_df.iterrows():
+        if 'mos_allocation' in row and row['mos_allocation']:
+            mos_allocation = row['mos_allocation']
+            total_allocation = sum(mos_allocation.values())
+            if total_allocation > row['size']:
+                issues.append(
+                    f"{row['course_title']} starting {row['start_date'].strftime('%Y-%m-%d')} has total MOS allocation " +
+                    f"{total_allocation}, but class size is {row['size']}"
+                )
+    
+    return {
+        'valid': len(issues) == 0,
+        'issues': issues,
+        'warnings': warnings
+    }
+
+def safe_run_simulation(simulation_inputs):
+    """
+    Safely run simulation with error handling
+    Args:
+        simulation_inputs (dict): Simulation inputs
+    Returns:
+        dict: Simulation results or default results if error occurs
+    """
+    try:
+        return run_simulation(simulation_inputs)
+    except Exception as e:
+        print(f"Simulation error during optimization: {e}")
+        # Return a default result structure that won't crash the optimizer
+        return {
+            'avg_completion_time': float('inf'),
+            'avg_wait_time': float('inf'),
+            'throughput': 0,
+            'resource_utilization': 0,
+            'bottlenecks': [],
+            'class_utilization': []
+        }
