@@ -1,4 +1,3 @@
-# utils.py
 import pandas as pd
 import numpy as np
 import datetime
@@ -26,6 +25,17 @@ def ensure_config_compatibility(config):
             'courses': config['prerequisites']
         }
         config['or_prerequisites'] = []
+    
+    # Add MOS paths if they don't exist
+    if 'mos_paths' not in config:
+        config['mos_paths'] = {
+            '18A': [],
+            '18B': [],
+            '18C': [],
+            '18D': [],
+            '18E': []
+        }
+        config['required_for_all_mos'] = False
     
     return config
 
@@ -167,24 +177,36 @@ def calculate_class_conflicts(schedule):
             
             # Check if classes overlap in time
             if (class1['start_date'] <= class2['end_date'] and class1['end_date'] >= class2['start_date']):
-                # Check if they share prerequisites (which would indicate a conflict)
-                course1 = class1['course_title']
-                course2 = class2['course_title']
-                
                 # Calculate overlap days
                 overlap_start = max(class1['start_date'], class2['start_date'])
                 overlap_end = min(class1['end_date'], class2['end_date'])
                 overlap_days = (overlap_end - overlap_start).days + 1
                 
-                conflicts.append({
-                    'course1': course1,
-                    'course2': course2,
-                    'start1': class1['start_date'].strftime('%Y-%m-%d'),
-                    'end1': class1['end_date'].strftime('%Y-%m-%d'),
-                    'start2': class2['start_date'].strftime('%Y-%m-%d'),
-                    'end2': class2['end_date'].strftime('%Y-%m-%d'),
-                    'overlap_days': overlap_days
-                })
+                # Check for MOS allocation overlap
+                mos_overlap = False
+                if 'mos_allocation' in class1 and 'mos_allocation' in class2:
+                    # Find MOS paths that overlap between the classes
+                    common_mos = set(class1['mos_allocation'].keys()) & set(class2['mos_allocation'].keys())
+                    
+                    # If there are common MOS paths with allocations > 0, there's a potential MOS conflict
+                    for mos in common_mos:
+                        if class1['mos_allocation'].get(mos, 0) > 0 and class2['mos_allocation'].get(mos, 0) > 0:
+                            mos_overlap = True
+                            break
+                else:
+                    # If MOS allocation not specified, assume overlap
+                    mos_overlap = True
+                
+                if mos_overlap:
+                    conflicts.append({
+                        'course1': class1['course_title'],
+                        'course2': class2['course_title'],
+                        'start1': class1['start_date'].strftime('%Y-%m-%d'),
+                        'end1': class1['end_date'].strftime('%Y-%m-%d'),
+                        'start2': class2['start_date'].strftime('%Y-%m-%d'),
+                        'end2': class2['end_date'].strftime('%Y-%m-%d'),
+                        'overlap_days': overlap_days
+                    })
     
     # Sort conflicts by overlap days (descending)
     conflicts.sort(key=lambda x: x['overlap_days'], reverse=True)
@@ -277,6 +299,26 @@ def validate_schedule(schedule, course_configs):
                     f"but maximum capacity is {max_capacity}"
                 )
     
+    # Check MOS allocations
+    for _, row in schedule_df.iterrows():
+        if 'mos_allocation' in row and row['mos_allocation']:
+            course = row['course_title']
+            total_allocation = sum(row['mos_allocation'].values())
+            
+            # Check if total MOS allocation exceeds class size
+            if total_allocation > row['size']:
+                issues.append(
+                    f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has total MOS allocation {total_allocation}, " +
+                    f"but class size is {row['size']}"
+                )
+            
+            # Check if any MOS has zero allocation
+            for mos, count in row['mos_allocation'].items():
+                if count < 0:
+                    issues.append(
+                        f"{course} starting {row['start_date'].strftime('%Y-%m-%d')} has negative allocation for {mos}: {count}"
+                    )
+    
     return {
         'valid': len(issues) == 0,
         'issues': issues,
@@ -285,7 +327,7 @@ def validate_schedule(schedule, course_configs):
 
 def get_prerequisites(course_configs, course):
     """
-    Get all prerequisites for a course (including from OR groups)
+    Get all prerequisites for a course (including from OR groups and MOS paths)
     
     Args:
         course_configs (dict): Dictionary of course configurations
@@ -298,18 +340,452 @@ def get_prerequisites(course_configs, course):
         return []
     
     config = course_configs[course]
-    all_prereqs = []
+    all_prereqs = set()
     
     # Get standard prerequisites
     if 'prerequisites' in config:
         if isinstance(config['prerequisites'], list):
-            all_prereqs.extend(config['prerequisites'])
+            all_prereqs.update(config['prerequisites'])
         elif isinstance(config['prerequisites'], dict):
-            all_prereqs.extend(config['prerequisites'].get('courses', []))
+            all_prereqs.update(config['prerequisites'].get('courses', []))
     
     # Get OR prerequisites
     if 'or_prerequisites' in config:
         for group in config['or_prerequisites']:
-            all_prereqs.extend(group)
+            all_prereqs.update(group)
     
-    return list(set(all_prereqs))  # Remove duplicates
+    # Get MOS-specific prerequisites
+    if 'mos_paths' in config:
+        for mos, prereqs in config['mos_paths'].items():
+            all_prereqs.update(prereqs)
+    
+    return list(all_prereqs)  # Remove duplicates by converting set back to list
+
+def analyze_mos_enrollment(schedule):
+    """
+    Analyze MOS enrollment patterns across the schedule
+    
+    Args:
+        schedule (list): List of class dictionaries
+        
+    Returns:
+        dict: MOS enrollment statistics
+    """
+    # Track MOS enrollment
+    mos_enrollment = {
+        '18A': [],
+        '18B': [],
+        '18C': [],
+        '18D': [],
+        '18E': []
+    }
+    
+    # Track course-specific MOS enrollment
+    course_mos_enrollment = defaultdict(lambda: {
+        '18A': 0,
+        '18B': 0,
+        '18C': 0,
+        '18D': 0,
+        '18E': 0,
+        'total': 0
+    })
+    
+    # Process each class
+    for class_info in schedule:
+        course = class_info['course_title']
+        
+        if 'mos_allocation' in class_info and class_info['mos_allocation']:
+            for mos, count in class_info['mos_allocation'].items():
+                if mos in mos_enrollment:
+                    mos_enrollment[mos].append(count)
+                    course_mos_enrollment[course][mos] += count
+                    course_mos_enrollment[course]['total'] += count
+    
+    # Calculate statistics
+    mos_stats = {}
+    for mos, counts in mos_enrollment.items():
+        if counts:
+            mos_stats[mos] = {
+                'total': sum(counts),
+                'avg_per_class': np.mean(counts),
+                'max_per_class': np.max(counts),
+                'min_per_class': np.min(counts)
+            }
+        else:
+            mos_stats[mos] = {
+                'total': 0,
+                'avg_per_class': 0,
+                'max_per_class': 0,
+                'min_per_class': 0
+            }
+    
+    # Calculate course-specific MOS ratios
+    course_mos_ratios = {}
+    for course, counts in course_mos_enrollment.items():
+        total = counts['total']
+        if total > 0:
+            course_mos_ratios[course] = {
+                mos: counts[mos] / total for mos in ['18A', '18B', '18C', '18D', '18E']
+            }
+            course_mos_ratios[course]['total'] = total
+        else:
+            course_mos_ratios[course] = {
+                '18A': 0, '18B': 0, '18C': 0, '18D': 0, '18E': 0, 'total': 0
+            }
+    
+    return {
+        'mos_stats': mos_stats,
+        'course_mos_ratios': course_mos_ratios
+    }
+
+def format_mos_allocation(mos_allocation):
+    """
+    Format MOS allocation for display
+    
+    Args:
+        mos_allocation (dict): Dictionary of MOS allocations
+        
+    Returns:
+        str: Formatted string representation
+    """
+    if not mos_allocation:
+        return "None"
+    
+    parts = []
+    for mos, count in mos_allocation.items():
+        if count > 0:
+            parts.append(f"{mos}: {count}")
+    
+    if not parts:
+        return "None"
+    
+    return ", ".join(parts)
+
+def parse_mos_allocation(allocation_str):
+    """
+    Parse MOS allocation from string
+    
+    Args:
+        allocation_str (str): String representation of MOS allocation
+        
+    Returns:
+        dict: Dictionary of MOS allocations
+    """
+    if not allocation_str or allocation_str.lower() == "none":
+        return {}
+    
+    allocation = {
+        '18A': 0,
+        '18B': 0,
+        '18C': 0,
+        '18D': 0,
+        '18E': 0
+    }
+    
+    try:
+        parts = allocation_str.split(",")
+        for part in parts:
+            if ":" not in part:
+                continue
+                
+            mos, count_str = part.split(":")
+            mos = mos.strip()
+            count = int(count_str.strip())
+            
+            if mos in allocation:
+                allocation[mos] = count
+    except Exception:
+        # Return empty allocation if parsing fails
+        return {}
+    
+    return allocation
+
+def calculate_schedule_metrics(schedule, course_configs):
+    """
+    Calculate overall metrics for a schedule
+    
+    Args:
+        schedule (list): List of class dictionaries
+        course_configs (dict): Dictionary of course configurations
+        
+    Returns:
+        dict: Schedule metrics
+    """
+    # Convert to DataFrame for easier manipulation
+    schedule_df = pd.DataFrame(schedule)
+    
+    # Skip if schedule is empty
+    if len(schedule_df) == 0:
+        return {
+            'total_classes': 0,
+            'total_seats': 0,
+            'duration_days': 0,
+            'classes_per_month': 0,
+            'avg_class_size': 0,
+            'mos_distribution': {
+                '18A': 0, '18B': 0, '18C': 0, '18D': 0, '18E': 0
+            }
+        }
+    
+    # Convert dates to datetime
+    schedule_df['start_date'] = pd.to_datetime(schedule_df['start_date'])
+    schedule_df['end_date'] = pd.to_datetime(schedule_df['end_date'])
+    
+    # Calculate total classes and seats
+    total_classes = len(schedule_df)
+    total_seats = schedule_df['size'].sum()
+    
+    # Calculate schedule duration
+    min_date = schedule_df['start_date'].min()
+    max_date = schedule_df['end_date'].max()
+    duration_days = (max_date - min_date).days + 1
+    
+    # Calculate classes per month
+    months = duration_days / 30.0
+    classes_per_month = total_classes / months if months > 0 else 0
+    
+    # Calculate average class size
+    avg_class_size = total_seats / total_classes if total_classes > 0 else 0
+    
+    # Calculate MOS distribution
+    mos_counts = {
+        '18A': 0,
+        '18B': 0,
+        '18C': 0,
+        '18D': 0,
+        '18E': 0
+    }
+    
+    for _, row in schedule_df.iterrows():
+        if 'mos_allocation' in row and row['mos_allocation']:
+            for mos, count in row['mos_allocation'].items():
+                if mos in mos_counts:
+                    mos_counts[mos] += count
+    
+    # Calculate percentages
+    total_allocated = sum(mos_counts.values())
+    mos_distribution = {
+        mos: count / total_allocated if total_allocated > 0 else 0
+        for mos, count in mos_counts.items()
+    }
+    
+    # Calculate throughput metrics
+    # We'll estimate the number of students that could complete the full program
+    # based on the capacities and prerequisites
+    
+    # Group classes by course
+    courses = schedule_df.groupby('course_title')
+    
+    # Calculate seats per course
+    seats_per_course = {
+        course: group['size'].sum() for course, group in courses
+    }
+    
+    # Calculate potential bottlenecks
+    course_throughputs = {}
+    for course, config in course_configs.items():
+        if course not in seats_per_course:
+            continue
+            
+        # Get prerequisites
+        prereqs = []
+        if 'prerequisites' in config and isinstance(config['prerequisites'], dict):
+            prereqs.extend(config['prerequisites'].get('courses', []))
+        
+        # Calculate maximum possible throughput based on this course and its prerequisites
+        throughput = seats_per_course.get(course, 0)
+        
+        for prereq in prereqs:
+            if prereq in seats_per_course:
+                # Throughput is limited by the minimum seats available in any prerequisite
+                throughput = min(throughput, seats_per_course[prereq])
+        
+        course_throughputs[course] = throughput
+    
+    # Overall program throughput is the minimum throughput of any required course
+    program_throughput = min(course_throughputs.values()) if course_throughputs else 0
+    
+    return {
+        'total_classes': total_classes,
+        'total_seats': total_seats,
+        'duration_days': duration_days,
+        'classes_per_month': classes_per_month,
+        'avg_class_size': avg_class_size,
+        'mos_distribution': mos_distribution,
+        'seats_per_course': seats_per_course,
+        'program_throughput': program_throughput
+    }
+
+def optimize_mos_allocation(class_info, mos_demand=None):
+    """
+    Optimize MOS allocation for a class based on demand
+    
+    Args:
+        class_info (dict): Class information
+        mos_demand (dict): Dictionary of MOS demand percentages
+        
+    Returns:
+        dict: Optimized MOS allocation
+    """
+    if not mos_demand:
+        # Default demand distribution if not provided
+        mos_demand = {
+            '18A': 0.2,
+            '18B': 0.2,
+            '18C': 0.2,
+            '18D': 0.2,
+            '18E': 0.2
+        }
+    
+    total_size = class_info['size']
+    
+    # Calculate allocation based on demand
+    allocation = {}
+    remaining = total_size
+    
+    # First pass: allocate seats based on demand percentages
+    for mos, demand in mos_demand.items():
+        seats = int(total_size * demand)
+        allocation[mos] = seats
+        remaining -= seats
+    
+    # Distribute remaining seats to MOS with highest fractional parts
+    if remaining > 0:
+        fractional_parts = {
+            mos: (total_size * demand) - int(total_size * demand)
+            for mos, demand in mos_demand.items()
+        }
+        
+        # Sort MOS by fractional part (descending)
+        sorted_mos = sorted(fractional_parts.items(), key=lambda x: x[1], reverse=True)
+        
+        # Distribute remaining seats
+        for i in range(remaining):
+            if i < len(sorted_mos):
+                mos = sorted_mos[i][0]
+                allocation[mos] += 1
+    
+    # Handle negative remaining (should not happen normally)
+    elif remaining < 0:
+        # Remove seats from MOS with most seats
+        sorted_allocation = sorted(allocation.items(), key=lambda x: x[1], reverse=True)
+        
+        for i in range(-remaining):
+            if i < len(sorted_allocation):
+                mos = sorted_allocation[i][0]
+                if allocation[mos] > 0:
+                    allocation[mos] -= 1
+    
+    return allocation
+
+def compare_schedules(original_schedule, new_schedule):
+    """
+    Compare two schedules and identify changes
+    
+    Args:
+        original_schedule (list): Original schedule
+        new_schedule (list): New schedule
+        
+    Returns:
+        dict: Comparison results
+    """
+    # Convert to DataFrames
+    if original_schedule:
+        original_df = pd.DataFrame(original_schedule)
+        original_df['start_date'] = pd.to_datetime(original_df['start_date'])
+        original_df['end_date'] = pd.to_datetime(original_df['end_date'])
+    else:
+        original_df = pd.DataFrame(columns=['id', 'course_title', 'start_date', 'end_date', 'size'])
+    
+    if new_schedule:
+        new_df = pd.DataFrame(new_schedule)
+        new_df['start_date'] = pd.to_datetime(new_df['start_date'])
+        new_df['end_date'] = pd.to_datetime(new_df['end_date'])
+    else:
+        new_df = pd.DataFrame(columns=['id', 'course_title', 'start_date', 'end_date', 'size'])
+    
+    # Identify added classes
+    if not original_df.empty and not new_df.empty:
+        original_ids = set(original_df['id'])
+        new_ids = set(new_df['id'])
+        
+        added_ids = new_ids - original_ids
+        removed_ids = original_ids - new_ids
+        modified_ids = set()
+        
+        # Identify modified classes
+        for class_id in original_ids & new_ids:
+            original_class = original_df[original_df['id'] == class_id].iloc[0]
+            new_class = new_df[new_df['id'] == class_id].iloc[0]
+            
+            # Check if any key attributes changed
+            if (original_class['start_date'] != new_class['start_date'] or
+                original_class['end_date'] != new_class['end_date'] or
+                original_class['size'] != new_class['size']):
+                modified_ids.add(class_id)
+    else:
+        # If either schedule is empty, all classes are added or removed
+        added_ids = set(new_df['id']) if not new_df.empty else set()
+        removed_ids = set(original_df['id']) if not original_df.empty else set()
+        modified_ids = set()
+    
+    # Create detailed change records
+    added_classes = []
+    removed_classes = []
+    modified_classes = []
+    
+    for class_id in added_ids:
+        new_class = new_df[new_df['id'] == class_id].iloc[0]
+        added_classes.append({
+            'id': int(class_id),
+            'course_title': new_class['course_title'],
+            'start_date': new_class['start_date'].strftime('%Y-%m-%d'),
+            'end_date': new_class['end_date'].strftime('%Y-%m-%d'),
+            'size': int(new_class['size'])
+        })
+    
+    for class_id in removed_ids:
+        original_class = original_df[original_df['id'] == class_id].iloc[0]
+        removed_classes.append({
+            'id': int(class_id),
+            'course_title': original_class['course_title'],
+            'start_date': original_class['start_date'].strftime('%Y-%m-%d'),
+            'end_date': original_class['end_date'].strftime('%Y-%m-%d'),
+            'size': int(original_class['size'])
+        })
+    
+    for class_id in modified_ids:
+        original_class = original_df[original_df['id'] == class_id].iloc[0]
+        new_class = new_df[new_df['id'] == class_id].iloc[0]
+        
+        modified_classes.append({
+            'id': int(class_id),
+            'course_title': new_class['course_title'],
+            'original_start': original_class['start_date'].strftime('%Y-%m-%d'),
+            'original_end': original_class['end_date'].strftime('%Y-%m-%d'),
+            'original_size': int(original_class['size']),
+            'new_start': new_class['start_date'].strftime('%Y-%m-%d'),
+            'new_end': new_class['end_date'].strftime('%Y-%m-%d'),
+            'new_size': int(new_class['size'])
+        })
+    
+    # Calculate summary metrics
+    original_metrics = {
+        'total_classes': len(original_df),
+        'total_seats': original_df['size'].sum() if not original_df.empty else 0
+    }
+    
+    new_metrics = {
+        'total_classes': len(new_df),
+        'total_seats': new_df['size'].sum() if not new_df.empty else 0
+    }
+    
+    return {
+        'added_classes': added_classes,
+        'removed_classes': removed_classes,
+        'modified_classes': modified_classes,
+        'original_metrics': original_metrics,
+        'new_metrics': new_metrics,
+        'net_change_classes': new_metrics['total_classes'] - original_metrics['total_classes'],
+        'net_change_seats': new_metrics['total_seats'] - original_metrics['total_seats']
+    }

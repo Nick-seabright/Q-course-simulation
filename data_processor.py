@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from collections import defaultdict
 
 def process_data(raw_data):
     """
@@ -43,6 +44,75 @@ def process_data(raw_data):
     
     # Extract group type (Active Duty, National Guard, etc.)
     data['GroupType'] = data['Group Type']
+    
+    # Try to extract or infer Training MOS
+    # Check if there's an explicit Training MOS column
+    mos_column = None
+    possible_columns = ['Training MOS', 'MOS', 'TrainingMOS', 'TMOS']
+    
+    for col in possible_columns:
+        if col in data.columns:
+            mos_column = col
+            break
+    
+    # If no explicit MOS column, try to infer from course titles or other data
+    if not mos_column:
+        # Create a new column for inferred MOS
+        data['InferredMOS'] = None
+        
+        # Infer MOS from personnel type and course titles
+        for i, row in data.iterrows():
+            inferred_mos = None
+            
+            # Officers are typically 18A
+            if row.get('PersonnelType') == 'Officer':
+                inferred_mos = '18A'
+            else:
+                # Try to infer from course title
+                course_title = str(row.get('Course Title', '')).upper()
+                
+                if 'WEAPONS' in course_title or 'WEAP SGT' in course_title:
+                    inferred_mos = '18B'
+                elif 'ENGINEER' in course_title or 'ENG SGT' in course_title:
+                    inferred_mos = '18C'
+                elif 'MEDICAL' in course_title or 'MED SGT' in course_title or 'MEDIC' in course_title:
+                    inferred_mos = '18D'
+                elif 'COMM' in course_title or 'SIGNAL' in course_title or 'COMMO SGT' in course_title:
+                    inferred_mos = '18E'
+            
+            data.at[i, 'InferredMOS'] = inferred_mos
+        
+        # Use the inferred MOS column
+        data['TrainingMOS'] = data['InferredMOS']
+    else:
+        # Use the existing MOS column but standardize the values
+        data['TrainingMOS'] = data[mos_column]
+        
+        # Map non-standard MOS codes to standard ones
+        mos_mapping = {
+            'OFFICER': '18A',
+            'WEAPONS': '18B',
+            'ENGINEER': '18C',
+            'MEDICAL': '18D',
+            'COMMUNICATIONS': '18E'
+        }
+        
+        for i, row in data.iterrows():
+            current_mos = str(row['TrainingMOS']).upper()
+            
+            # Check if we need to map this MOS
+            for key, value in mos_mapping.items():
+                if key in current_mos:
+                    data.at[i, 'TrainingMOS'] = value
+                    break
+            
+            # If still not a standard MOS, make a best guess
+            if data.at[i, 'TrainingMOS'] not in ['18A', '18B', '18C', '18D', '18E']:
+                if row.get('PersonnelType') == 'Officer':
+                    data.at[i, 'TrainingMOS'] = '18A'
+                else:
+                    # Default to a random enlisted MOS if we can't determine
+                    data.at[i, 'TrainingMOS'] = np.random.choice(['18B', '18C', '18D', '18E'])
     
     return data
 
@@ -95,7 +165,7 @@ def analyze_historical_data(processed_data):
         classes = group.groupby(['CLS', 'Cls Start Date'])
         class_sizes = classes.size().values
         if len(class_sizes) > 0:
-            avg_class_size = int(np.mean(class_sizes))  # Convert to integer
+            avg_class_size = int(np.mean(class_sizes))
         else:
             avg_class_size = 0
             
@@ -107,7 +177,7 @@ def analyze_historical_data(processed_data):
         group['FY'] = group['FY'].astype(str)
         fy_classes = group.groupby('FY').apply(lambda x: x[['CLS']].drop_duplicates().shape[0])
         if len(fy_classes) > 0:
-            classes_per_year = fy_classes.mean()
+            classes_per_year = int(fy_classes.mean())
         else:
             classes_per_year = 0
             
@@ -125,7 +195,16 @@ def analyze_historical_data(processed_data):
             
         # Group type composition
         group_counts = group['GroupType'].value_counts()
-        group_composition = {group_type: count / len(group) for group_type, count in group_counts.items()}
+        total_students = group_counts.sum()
+        group_composition = {group_type: count / total_students for group_type, count in group_counts.items()}
+        
+        # MOS composition
+        if 'TrainingMOS' in group.columns:
+            mos_counts = group['TrainingMOS'].value_counts()
+            total_mos = mos_counts.sum()
+            mos_composition = {mos: count / total_mos for mos, count in mos_counts.items()}
+        else:
+            mos_composition = {}
         
         # Store all statistics
         course_stats[course] = {
@@ -138,10 +217,154 @@ def analyze_historical_data(processed_data):
             'classes_per_year': classes_per_year,
             'officer_ratio': officer_ratio,
             'enlisted_ratio': enlisted_ratio,
-            'group_composition': group_composition
+            'group_composition': group_composition,
+            'mos_composition': mos_composition
         }
     
     return course_stats
+
+def extract_historical_arrival_patterns(processed_data):
+    """
+    Extract historical student arrival patterns from processed data
+    
+    Args:
+        processed_data (pd.DataFrame): Processed training data
+    
+    Returns:
+        dict: Dictionary of arrival patterns
+    """
+    # Check if required columns exist
+    if 'Cls Start Date' not in processed_data.columns or 'Input Date' not in processed_data.columns:
+        return None
+    
+    # Filter to only include valid data
+    valid_data = processed_data.dropna(subset=['Cls Start Date', 'Input Date'])
+    
+    # Calculate days before class start that students arrive
+    valid_data['days_before'] = (valid_data['Cls Start Date'] - valid_data['Input Date']).dt.days
+    
+    # Filter out negative values (input after class start) and unreasonably large values
+    valid_arrivals = valid_data[(valid_data['days_before'] >= 0) & (valid_data['days_before'] <= 90)]
+    
+    if len(valid_arrivals) == 0:
+        return None
+    
+    # Calculate average days before class start
+    avg_days_before = valid_arrivals['days_before'].mean()
+    
+    # Extract monthly distribution of arrivals
+    valid_arrivals['arrival_month'] = valid_arrivals['Input Date'].dt.month_name()
+    monthly_counts = valid_arrivals['arrival_month'].value_counts()
+    total_students = monthly_counts.sum()
+    
+    monthly_distribution = {}
+    for month, count in monthly_counts.items():
+        monthly_distribution[month] = count / total_students if total_students > 0 else 0
+    
+    return {
+        'avg_days_before': avg_days_before,
+        'monthly_distribution': monthly_distribution
+    }
+
+def extract_historical_mos_distribution(processed_data):
+    """
+    Extract historical MOS distribution from processed data
+    
+    Args:
+        processed_data (pd.DataFrame): Processed training data
+    
+    Returns:
+        dict: Dictionary of MOS distribution
+    """
+    # Check if MOS column exists (might be called "Training MOS" or similar)
+    if 'TrainingMOS' in processed_data.columns:
+        mos_column = 'TrainingMOS'
+    else:
+        # Try to find another suitable column
+        possible_columns = ['Training MOS', 'MOS', 'TrainingMOS', 'TMOS']
+        
+        for col in possible_columns:
+            if col in processed_data.columns:
+                mos_column = col
+                break
+        
+        if not mos_column:
+            # If no explicit MOS column, try to infer from other data
+            # For example, Officers (CP Pers Type = 'O') might be 18A
+            if 'CP Pers Type' in processed_data.columns:
+                # Create synthetic MOS distribution based on personnel type
+                officers = (processed_data['CP Pers Type'] == 'O').sum()
+                enlisted = (processed_data['CP Pers Type'] == 'E').sum()
+                total = officers + enlisted
+                
+                if total > 0:
+                    # Officers are 18A, distribute enlisted evenly among other MOS
+                    mos_distribution = {
+                        '18A': officers / total,
+                        '18B': enlisted / total / 4,
+                        '18C': enlisted / total / 4,
+                        '18D': enlisted / total / 4,
+                        '18E': enlisted / total / 4
+                    }
+                    return mos_distribution
+            
+            # Default distribution if we can't extract from data
+            return {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+    
+    # If we have an MOS column, calculate the distribution
+    mos_counts = processed_data[mos_column].value_counts()
+    total_students = mos_counts.sum()
+    
+    # Map to standard MOS codes if needed
+    mos_mapping = {
+        'OFFICER': '18A',
+        'WEAPONS': '18B',
+        'ENGINEER': '18C',
+        'MEDICAL': '18D',
+        'COMMUNICATIONS': '18E'
+    }
+    
+    mos_distribution = {}
+    
+    for mos, count in mos_counts.items():
+        # Try to map the MOS to standard code
+        standard_mos = mos
+        for key, value in mos_mapping.items():
+            if isinstance(mos, str) and key in mos.upper():
+                standard_mos = value
+                break
+        
+        # If not one of our standard MOS codes, group with the closest match
+        if standard_mos not in ['18A', '18B', '18C', '18D', '18E']:
+            # Default to distributing evenly among enlisted MOS if officer/enlisted info available
+            if 'CP Pers Type' in processed_data.columns:
+                # Check if this MOS is typically for officers
+                mos_entries = processed_data[processed_data[mos_column] == mos]
+                officer_count = (mos_entries['CP Pers Type'] == 'O').sum()
+                enlisted_count = (mos_entries['CP Pers Type'] == 'E').sum()
+                
+                if officer_count > enlisted_count:
+                    standard_mos = '18A'  # Assume officer MOS
+                else:
+                    # Distribute evenly among enlisted MOS for now
+                    # In a real implementation, you might want more sophisticated mapping
+                    standard_mos = np.random.choice(['18B', '18C', '18D', '18E'])
+            else:
+                # If no officer/enlisted info, just distribute evenly
+                standard_mos = np.random.choice(['18A', '18B', '18C', '18D', '18E'])
+        
+        # Add to distribution
+        if standard_mos in mos_distribution:
+            mos_distribution[standard_mos] += count / total_students if total_students > 0 else 0
+        else:
+            mos_distribution[standard_mos] = count / total_students if total_students > 0 else 0
+    
+    # Ensure all standard MOS codes are present
+    for mos in ['18A', '18B', '18C', '18D', '18E']:
+        if mos not in mos_distribution:
+            mos_distribution[mos] = 0
+    
+    return mos_distribution
 
 def infer_prerequisites(processed_data):
     """
@@ -232,3 +455,177 @@ def infer_prerequisites(processed_data):
             prerequisites[course] = prereq_structure
     
     return prerequisites
+
+def infer_mos_paths(processed_data):
+    """
+    Infer MOS-specific training paths from historical data
+    
+    Args:
+        processed_data (pd.DataFrame): Processed training data
+    
+    Returns:
+        dict: Dictionary of course to MOS path mappings
+    """
+    if 'TrainingMOS' not in processed_data.columns:
+        return {}  # Can't infer MOS paths without MOS data
+    
+    # Group by course and MOS
+    course_mos_groups = processed_data.groupby(['Course Title', 'TrainingMOS'])
+    
+    # Count students in each course by MOS
+    course_mos_counts = course_mos_groups.size().reset_index(name='count')
+    
+    # Calculate total students per course
+    course_totals = course_mos_counts.groupby('Course Title')['count'].sum().to_dict()
+    
+    # Calculate percentage of each MOS in each course
+    course_mos_counts['percentage'] = course_mos_counts.apply(
+        lambda row: row['count'] / course_totals[row['Course Title']] if row['Course Title'] in course_totals else 0, 
+        axis=1
+    )
+    
+    # Initialize course to MOS path mappings
+    mos_paths = {}
+    
+    # Standard MOS codes
+    mos_codes = ['18A', '18B', '18C', '18D', '18E']
+    
+    # For each course, determine which MOS paths it belongs to
+    for course in course_totals.keys():
+        mos_paths[course] = {}
+        course_data = course_mos_counts[course_mos_counts['Course Title'] == course]
+        
+        for mos in mos_codes:
+            # Get percentage of this MOS in the course
+            mos_data = course_data[course_data['TrainingMOS'] == mos]
+            if not mos_data.empty:
+                percentage = mos_data.iloc[0]['percentage']
+                
+                # If more than 10% of students with this MOS take this course, 
+                # consider it part of this MOS path
+                if percentage >= 0.1:
+                    mos_paths[course][mos] = True
+                else:
+                    mos_paths[course][mos] = False
+            else:
+                mos_paths[course][mos] = False
+    
+    # Convert the dictionary format to match the expected format in the app
+    formatted_mos_paths = {}
+    for course, mos_dict in mos_paths.items():
+        formatted_mos_paths[course] = {
+            'mos_paths': {
+                mos: [] for mos, included in mos_dict.items() if included
+            },
+            'required_for_all_mos': all(mos_dict.values())
+        }
+    
+    return formatted_mos_paths
+
+def analyze_student_progression(processed_data):
+    """
+    Analyze student progression through courses over time
+    
+    Args:
+        processed_data (pd.DataFrame): Processed training data
+    
+    Returns:
+        dict: Dictionary of progression metrics
+    """
+    # Group data by student (SSN)
+    student_groups = processed_data.groupby('SSN')
+    
+    # Track metrics
+    completion_times = []
+    wait_times = []
+    progression_paths = []
+    
+    for ssn, student_data in student_groups:
+        # Sort by class start date
+        student_courses = student_data.sort_values('Cls Start Date')
+        
+        # Only consider students who completed at least one course
+        graduated_courses = student_courses[student_courses['Graduated']]
+        if len(graduated_courses) == 0:
+            continue
+        
+        # Calculate completion time (from first class start to last class end)
+        if len(graduated_courses) > 1:
+            first_start = graduated_courses['Cls Start Date'].min()
+            last_end = graduated_courses['Cls End Date'].max()
+            completion_time = (last_end - first_start).days
+            completion_times.append(completion_time)
+        
+        # Calculate wait times between courses
+        if len(graduated_courses) > 1:
+            sorted_courses = graduated_courses.sort_values('Cls Start Date')
+            for i in range(1, len(sorted_courses)):
+                prev_end = sorted_courses.iloc[i-1]['Cls End Date']
+                curr_start = sorted_courses.iloc[i]['Cls Start Date']
+                wait_time = (curr_start - prev_end).days
+                
+                # Only count positive wait times
+                if wait_time > 0:
+                    wait_times.append({
+                        'student': ssn,
+                        'prev_course': sorted_courses.iloc[i-1]['Course Title'],
+                        'next_course': sorted_courses.iloc[i]['Course Title'],
+                        'wait_time': wait_time
+                    })
+        
+        # Record progression path
+        if len(graduated_courses) > 0:
+            course_sequence = graduated_courses['Course Title'].tolist()
+            progression_paths.append({
+                'student': ssn,
+                'sequence': course_sequence
+            })
+    
+    # Calculate average completion time
+    avg_completion_time = np.mean(completion_times) if completion_times else 0
+    
+    # Calculate average wait time
+    avg_wait_time = np.mean([w['wait_time'] for w in wait_times]) if wait_times else 0
+    
+    # Find common wait bottlenecks
+    wait_bottlenecks = defaultdict(list)
+    for wait in wait_times:
+        key = (wait['prev_course'], wait['next_course'])
+        wait_bottlenecks[key].append(wait['wait_time'])
+    
+    bottlenecks = [
+        {
+            'prev_course': prev,
+            'next_course': next_,
+            'avg_wait_time': np.mean(times),
+            'count': len(times)
+        }
+        for (prev, next_), times in wait_bottlenecks.items()
+    ]
+    
+    # Sort bottlenecks by average wait time
+    bottlenecks.sort(key=lambda x: x['avg_wait_time'], reverse=True)
+    
+    # Find common progression paths
+    path_counts = defaultdict(int)
+    for path in progression_paths:
+        path_tuple = tuple(path['sequence'])
+        path_counts[path_tuple] += 1
+    
+    common_paths = [
+        {
+            'sequence': list(path),
+            'count': count
+        }
+        for path, count in path_counts.items()
+    ]
+    
+    # Sort by frequency
+    common_paths.sort(key=lambda x: x['count'], reverse=True)
+    
+    return {
+        'avg_completion_time': avg_completion_time,
+        'avg_wait_time': avg_wait_time,
+        'bottlenecks': bottlenecks,
+        'common_paths': common_paths[:10]  # Top 10 most common paths
+    }

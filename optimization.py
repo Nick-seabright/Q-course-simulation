@@ -21,6 +21,7 @@ def optimize_schedule(inputs):
             - allow_capacity_changes: Whether to allow capacity changes
             - allow_duration_changes: Whether to allow duration changes
             - allow_prerequisite_changes: Whether to allow prerequisite changes
+            - allow_mos_allocation_changes: Whether to allow MOS allocation changes
     
     Returns:
         dict: Optimization results
@@ -36,6 +37,7 @@ def optimize_schedule(inputs):
     allow_capacity_changes = inputs['allow_capacity_changes']
     allow_duration_changes = inputs['allow_duration_changes']
     allow_prerequisite_changes = inputs['allow_prerequisite_changes']
+    allow_mos_allocation_changes = inputs.get('allow_mos_allocation_changes', True)
     
     # Make a copy of the current schedule for optimization
     best_schedule = copy.deepcopy(current_schedule)
@@ -73,6 +75,7 @@ def optimize_schedule(inputs):
     schedule_changes = []
     capacity_changes = []
     prerequisite_changes = []
+    mos_allocation_changes = []
     other_recommendations = []
     
     # Extract bottlenecks from simulation results
@@ -84,6 +87,12 @@ def optimize_schedule(inputs):
         if u['utilization'] < 0.6
     ]
     
+    # Extract MOS-specific bottlenecks if available
+    mos_bottlenecks = {}
+    if 'mos_metrics' in simulation_results:
+        for mos, metrics in simulation_results['mos_metrics'].items():
+            mos_bottlenecks[mos] = metrics.get('avg_wait_time', 0)
+    
     # Optimization iterations
     for i in range(iterations):
         # Make a copy of the current best schedule and configs
@@ -91,7 +100,7 @@ def optimize_schedule(inputs):
         candidate_configs = copy.deepcopy(best_course_configs)
         
         # Choose an optimization strategy based on iteration
-        strategy = i % 4
+        strategy = i % 5  # Use 5 strategies with MOS allocation
         
         if strategy == 0:
             # Strategy 1: Adjust class dates for bottleneck courses
@@ -102,7 +111,7 @@ def optimize_schedule(inputs):
         elif strategy == 1 and allow_capacity_changes:
             # Strategy 2: Adjust class capacities
             changes = adjust_class_capacities(candidate_schedule, candidate_configs, 
-                                             bottlenecks, low_utilization_courses)
+                                             bottlenecks, low_utilization_courses, mos_bottlenecks)
             if changes:
                 capacity_changes.extend(changes)
         
@@ -128,6 +137,12 @@ def optimize_schedule(inputs):
             changes = adjust_prerequisites(candidate_configs, bottlenecks)
             if changes:
                 prerequisite_changes.extend(changes)
+        
+        elif strategy == 4 and allow_mos_allocation_changes:
+            # Strategy 5: Adjust MOS allocations
+            changes = adjust_mos_allocations(candidate_schedule, mos_bottlenecks)
+            if changes:
+                mos_allocation_changes.extend(changes)
         
         # Run simulation with the candidate schedule
         simulation_inputs = {
@@ -197,6 +212,7 @@ def optimize_schedule(inputs):
     schedule_changes = deduplicate_changes(schedule_changes)
     capacity_changes = deduplicate_changes(capacity_changes)
     prerequisite_changes = deduplicate_changes(prerequisite_changes)
+    mos_allocation_changes = deduplicate_changes(mos_allocation_changes)
     other_recommendations = list(set(other_recommendations))
     
     return {
@@ -207,6 +223,7 @@ def optimize_schedule(inputs):
             'schedule_changes': schedule_changes,
             'capacity_changes': capacity_changes,
             'prerequisite_changes': prerequisite_changes,
+            'mos_allocation_changes': mos_allocation_changes,
             'other_recommendations': other_recommendations
         }
     }
@@ -282,11 +299,15 @@ def adjust_class_dates(schedule, bottlenecks):
             'id': max([c['id'] for c in schedule]) + 1
         }
         
+        # Copy MOS allocation if available
+        if 'mos_allocation' in course_classes.iloc[0]:
+            new_class['mos_allocation'] = course_classes.iloc[0]['mos_allocation']
+        
         schedule.append(new_class)
     
     return changes
 
-def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilization_courses):
+def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilization_courses, mos_bottlenecks=None):
     """Adjust class capacities to optimize throughput"""
     changes = []
     
@@ -314,8 +335,47 @@ def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilizati
         # Cap at a reasonable maximum
         new_capacity = min(new_capacity, 250)
         
-        # Update all classes for this course
+        # Adjust MOS allocation proportionally if available
         for class_info in course_classes:
+            if 'mos_allocation' in class_info and class_info['mos_allocation']:
+                original_allocation = class_info['mos_allocation'].copy()
+                original_total = sum(original_allocation.values())
+                
+                if original_total > 0:
+                    # Scale each MOS allocation proportionally to the new capacity
+                    new_allocation = {}
+                    for mos, count in original_allocation.items():
+                        # If this MOS has high wait times, increase its allocation more
+                        mos_wait_time = mos_bottlenecks.get(mos, 0) if mos_bottlenecks else 0
+                        mos_increase_pct = min(0.4, (wait_time + mos_wait_time) / 100)
+                        
+                        mos_scale = 1 + mos_increase_pct
+                        new_count = int(count * mos_scale)
+                        new_allocation[mos] = new_count
+                    
+                    # Adjust to match new total capacity
+                    new_total = sum(new_allocation.values())
+                    if new_total > 0:
+                        scale_factor = new_capacity / new_total
+                        for mos in new_allocation:
+                            new_allocation[mos] = int(new_allocation[mos] * scale_factor)
+                        
+                        # Assign any remaining seats
+                        remaining = new_capacity - sum(new_allocation.values())
+                        if remaining > 0:
+                            # Distribute remaining seats to MOS with highest wait times
+                            mos_wait_sorted = sorted(
+                                [(mos, mos_bottlenecks.get(mos, 0)) for mos in new_allocation],
+                                key=lambda x: x[1], reverse=True
+                            )
+                            
+                            for i in range(remaining):
+                                if i < len(mos_wait_sorted):
+                                    new_allocation[mos_wait_sorted[i][0]] += 1
+                            
+                            class_info['mos_allocation'] = new_allocation
+                
+            # Update class size
             class_info['size'] = new_capacity
         
         # Update course config
@@ -357,8 +417,36 @@ def adjust_class_capacities(schedule, course_configs, bottlenecks, low_utilizati
         # Ensure minimum reasonable class size
         new_capacity = max(new_capacity, 10)
         
-        # Update all classes for this course
+        # Adjust MOS allocation proportionally if available
         for class_info in course_classes:
+            if 'mos_allocation' in class_info and class_info['mos_allocation']:
+                original_allocation = class_info['mos_allocation'].copy()
+                original_total = sum(original_allocation.values())
+                
+                if original_total > 0:
+                    # Scale each MOS allocation proportionally to the new capacity
+                    new_allocation = {}
+                    for mos, count in original_allocation.items():
+                        new_count = int(count * (new_capacity / current_capacity))
+                        new_allocation[mos] = new_count
+                    
+                    # Adjust to match new total capacity
+                    new_total = sum(new_allocation.values())
+                    if new_total > 0:
+                        scale_factor = new_capacity / new_total
+                        for mos in new_allocation:
+                            new_allocation[mos] = int(new_allocation[mos] * scale_factor)
+                        
+                        # Handle any remaining seats
+                        remaining = new_capacity - sum(new_allocation.values())
+                        for i in range(remaining):
+                            # Add remaining seats to largest MOS allocations
+                            largest_mos = max(new_allocation.items(), key=lambda x: x[1])[0]
+                            new_allocation[largest_mos] += 1
+                        
+                        class_info['mos_allocation'] = new_allocation
+            
+            # Update class size
             class_info['size'] = new_capacity
         
         # Update course config
@@ -438,6 +526,10 @@ def adjust_class_frequency(schedule, bottlenecks, low_utilization_courses):
                     'id': max([c['id'] for c in schedule]) + 1
                 }
                 
+                # Copy MOS allocation if available
+                if 'mos_allocation' in course_classes.iloc[0]:
+                    new_class['mos_allocation'] = course_classes.iloc[0]['mos_allocation'].copy()
+                
                 schedule.append(new_class)
         else:
             # Only one class exists, add another one after a reasonable gap
@@ -462,6 +554,10 @@ def adjust_class_frequency(schedule, bottlenecks, low_utilization_courses):
                 'size': course_classes.iloc[0]['size'],
                 'id': max([c['id'] for c in schedule]) + 1
             }
+            
+            # Copy MOS allocation if available
+            if 'mos_allocation' in course_classes.iloc[0]:
+                new_class['mos_allocation'] = course_classes.iloc[0]['mos_allocation'].copy()
             
             schedule.append(new_class)
     
@@ -513,29 +609,220 @@ def adjust_prerequisites(course_configs, bottlenecks):
             continue
         
         # Check if course has many prerequisites
-        prerequisites = course_configs[course].get('prerequisites', [])
+        if 'prerequisites' in course_configs[course]:
+            prerequisites = course_configs[course]['prerequisites'].get('courses', [])
+            
+            if len(prerequisites) <= 1:
+                continue
+            
+            # Identify prerequisites that might be optional
+            for prereq in prerequisites:
+                # Record change
+                changes.append({
+                    'course': course,
+                    'original_prerequisites': prerequisites.copy(),
+                    'removed_prerequisite': prereq,
+                    'reason': f"Consider making {prereq} optional for {course} to reduce bottleneck"
+                })
+                
+                # Create a copy of prerequisites without this one
+                new_prerequisites = [p for p in prerequisites if p != prereq]
+                
+                # Update course config
+                course_configs[course]['prerequisites']['courses'] = new_prerequisites
+                
+                # Only remove one prerequisite per course
+                break
         
-        if len(prerequisites) <= 1:
+        # Check if course has MOS-specific prerequisites that could be optimized
+        if 'mos_paths' in course_configs[course]:
+            mos_paths = course_configs[course]['mos_paths']
+            
+            for mos, prereqs in mos_paths.items():
+                if len(prereqs) <= 1:
+                    continue
+                
+                # Identify MOS-specific prerequisites that might be optional
+                for prereq in prereqs:
+                    # Record change
+                    changes.append({
+                        'course': course,
+                        'mos': mos,
+                        'original_mos_prerequisites': prereqs.copy(),
+                        'removed_prerequisite': prereq,
+                        'reason': f"Consider making {prereq} optional for {mos} students taking {course} to reduce bottleneck"
+                    })
+                    
+                    # Create a copy of prerequisites without this one
+                    new_prerequisites = [p for p in prereqs if p != prereq]
+                    
+                    # Update course config
+                    course_configs[course]['mos_paths'][mos] = new_prerequisites
+                    
+                    # Only remove one prerequisite per MOS path
+                    break
+    
+    return changes
+
+def adjust_mos_allocations(schedule, mos_bottlenecks):
+    """Adjust MOS allocations to optimize throughput for bottlenecked MOS paths"""
+    changes = []
+    
+    # Skip if no MOS bottlenecks data
+    if not mos_bottlenecks:
+        return changes
+    
+    # Sort MOS by wait time (highest first)
+    sorted_mos = sorted(mos_bottlenecks.items(), key=lambda x: x[1], reverse=True)
+    
+    # Identify which MOS paths have the highest bottlenecks
+    bottleneck_mos = [mos for mos, wait_time in sorted_mos if wait_time > 10]
+    
+    # Skip if no significant MOS bottlenecks
+    if not bottleneck_mos:
+        return changes
+    
+    # Process each class with MOS allocations
+    for class_info in schedule:
+        if 'mos_allocation' not in class_info or not class_info['mos_allocation']:
             continue
         
-        # Identify prerequisites that might be optional
-        for prereq in prerequisites:
-            # Record change
-            changes.append({
-                'course': course,
-                'original_prerequisites': prerequisites.copy(),
-                'removed_prerequisite': prereq,
-                'reason': f"Consider making {prereq} optional for {course} to reduce bottleneck"
-            })
+        original_allocation = class_info['mos_allocation'].copy()
+        total_size = class_info['size']
+        
+        # Skip if class is small or has no allocation
+        if total_size < 10 or sum(original_allocation.values()) == 0:
+            continue
+        
+        # Determine if this class can help bottlenecked MOS paths
+        relevant_mos = [mos for mos in bottleneck_mos if mos in original_allocation]
+        
+        if not relevant_mos:
+            continue
+        
+        # Create a new allocation that increases seats for bottlenecked MOS paths
+        new_allocation = original_allocation.copy()
+        
+        # Increase allocation for bottlenecked MOS by up to 30%
+        # and decrease allocation for non-bottlenecked MOS
+        for mos, wait_time in sorted_mos:
+            if mos not in original_allocation:
+                continue
+                
+            current_allocation = original_allocation[mos]
             
-            # Create a copy of prerequisites without this one
-            new_prerequisites = [p for p in prerequisites if p != prereq]
+            if mos in bottleneck_mos:
+                # Increase by 10-30% based on wait time
+                increase_pct = min(0.3, wait_time / 50)
+                new_allocation[mos] = int(current_allocation * (1 + increase_pct))
+            else:
+                # Decrease non-bottlenecked MOS, but ensure at least 1 seat
+                new_allocation[mos] = max(1, int(current_allocation * 0.9))
+        
+        # Adjust to ensure total seats match class size
+        new_total = sum(new_allocation.values())
+        
+        if new_total > total_size:
+            # If over capacity, reduce non-bottlenecked MOS first
+            excess = new_total - total_size
             
-            # Update course config
-            course_configs[course]['prerequisites'] = new_prerequisites
+            # Sort non-bottlenecked MOS by wait time (lowest first)
+            non_bottleneck_mos = [(mos, count) for mos, count in new_allocation.items() 
+                                 if mos not in bottleneck_mos]
+            non_bottleneck_mos.sort(key=lambda x: mos_bottlenecks.get(x[0], 0))
             
-            # Only remove one prerequisite per course
-            break
+            # Reduce seats for non-bottlenecked MOS
+            for mos, count in non_bottleneck_mos:
+                if excess <= 0:
+                    break
+                
+                # Reduce this MOS allocation, ensuring at least 1 seat
+                reduction = min(excess, count - 1)
+                if reduction > 0:
+                    new_allocation[mos] -= reduction
+                    excess -= reduction
+            
+            # If still over capacity, reduce bottlenecked MOS starting with lowest wait time
+            if excess > 0:
+                bottleneck_mos_list = [(mos, wait_time) for mos, wait_time in sorted_mos 
+                                       if mos in bottleneck_mos and mos in new_allocation]
+                
+                # Sort by wait time (lowest first)
+                bottleneck_mos_list.sort(key=lambda x: x[1])
+                
+                for mos, _ in bottleneck_mos_list:
+                    if excess <= 0:
+                        break
+                    
+                    # Reduce this MOS allocation, ensuring at least 1 seat
+                    reduction = min(excess, new_allocation[mos] - 1)
+                    if reduction > 0:
+                        new_allocation[mos] -= reduction
+                        excess -= reduction
+        
+        elif new_total < total_size:
+            # If under capacity, add seats to bottlenecked MOS based on wait time
+            remaining = total_size - new_total
+            
+            # Calculate total wait time for bottlenecked MOS
+            total_wait_time = sum(mos_bottlenecks.get(mos, 0) for mos in bottleneck_mos 
+                                 if mos in new_allocation)
+            
+            if total_wait_time > 0:
+                # Distribute remaining seats proportionally to wait time
+                for mos in bottleneck_mos:
+                    if mos not in new_allocation:
+                        continue
+                    
+                    wait_time = mos_bottlenecks.get(mos, 0)
+                    proportion = wait_time / total_wait_time
+                    
+                    # Add seats based on proportion of total wait time
+                    seats_to_add = max(1, int(remaining * proportion))
+                    new_allocation[mos] += min(seats_to_add, remaining)
+                    remaining -= seats_to_add
+                    
+                    if remaining <= 0:
+                        break
+            
+            # If still under capacity, add remaining seats to any MOS
+            if remaining > 0:
+                for mos in sorted(new_allocation.keys()):
+                    new_allocation[mos] += 1
+                    remaining -= 1
+                    if remaining <= 0:
+                        break
+        
+        # Check if the allocation has changed significantly
+        changed = False
+        change_details = {}
+        
+        for mos in set(original_allocation.keys()) | set(new_allocation.keys()):
+            original = original_allocation.get(mos, 0)
+            new = new_allocation.get(mos, 0)
+            
+            if abs(original - new) >= 2 or (original > 0 and abs(original - new) / original > 0.1):
+                changed = True
+                change_details[f'original_{mos}'] = original
+                change_details[f'recommended_{mos}'] = new
+        
+        if changed:
+            # Record the change
+            change = {
+                'course': class_info['course_title'],
+                'class_id': class_info['id'],
+                'original_size': class_info['size'],
+                'recommended_size': class_info['size'],
+                'reason': "Rebalanced MOS allocation to reduce bottlenecks"
+            }
+            
+            # Add all MOS allocation details
+            change.update(change_details)
+            
+            changes.append(change)
+            
+            # Update the class allocation
+            class_info['mos_allocation'] = new_allocation
     
     return changes
 
@@ -546,7 +833,12 @@ def deduplicate_changes(changes):
     
     for change in changes:
         # Create a hashable representation of the change
-        change_tuple = tuple(sorted(change.items()))
+        if isinstance(change, dict):
+            # Convert dictionary to a tuple of (key, value) pairs
+            change_items = sorted((str(k), str(v)) for k, v in change.items())
+            change_tuple = tuple(change_items)
+        else:
+            change_tuple = str(change)
         
         if change_tuple not in seen:
             seen.add(change_tuple)

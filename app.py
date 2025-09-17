@@ -8,15 +8,15 @@ import json
 import copy
 from collections import defaultdict
 
-from data_processor import process_data, analyze_historical_data
+from data_processor import process_data, analyze_historical_data, extract_historical_arrival_patterns, extract_historical_mos_distribution
 from simulation_engine import run_simulation
 from optimization import optimize_schedule
 from utils import ensure_config_compatibility
 
-st.set_page_config(page_title="Military Training Schedule Optimizer", layout="wide")
+st.set_page_config(page_title="Training Schedule Optimizer", layout="wide")
 
 def main():
-    st.title("Military Training Schedule Optimization System")
+    st.title("Training Schedule Optimization System")
     
     # Sidebar navigation
     st.sidebar.title("Navigation")
@@ -47,6 +47,17 @@ def main():
                     'courses': config['prerequisites']
                 }
                 config['or_prerequisites'] = []
+                
+            # Add MOS paths if they don't exist
+            if 'mos_paths' not in config:
+                config['mos_paths'] = {
+                    '18A': [],
+                    '18B': [],
+                    '18C': [],
+                    '18D': [],
+                    '18E': []
+                }
+                config['required_for_all_mos'] = False
     
     if 'future_schedule' not in st.session_state:
         st.session_state.future_schedule = []
@@ -63,6 +74,12 @@ def main():
         display_simulation_page()
     elif page == "Optimization":
         display_optimization_page()
+    
+    # Add a reset button to the sidebar for debugging
+    if st.sidebar.button("Reset Application"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.experimental_rerun()
 
 def display_upload_page():
     st.header("Upload Training Data")
@@ -92,6 +109,47 @@ def display_upload_page():
             # Historical analysis
             historical_analysis = analyze_historical_data(processed_data)
             st.session_state.historical_analysis = historical_analysis
+            
+            # Extract historical arrival patterns and MOS distribution
+            historical_arrival_patterns = extract_historical_arrival_patterns(processed_data)
+            historical_mos_distribution = extract_historical_mos_distribution(processed_data)
+            
+            st.session_state.historical_arrival_patterns = historical_arrival_patterns
+            st.session_state.historical_mos_distribution = historical_mos_distribution
+            
+            # Display extracted patterns
+            with st.expander("Historical Patterns"):
+                if historical_arrival_patterns:
+                    st.write("### Historical Arrival Patterns")
+                    st.write(f"Average days before class start: {historical_arrival_patterns.get('avg_days_before', 'N/A')}")
+                    
+                    # Show monthly distribution
+                    monthly_data = historical_arrival_patterns.get('monthly_distribution', {})
+                    if monthly_data:
+                        months = list(monthly_data.keys())
+                        values = list(monthly_data.values())
+                        
+                        fig = px.bar(
+                            x=months, 
+                            y=values,
+                            title="Historical Monthly Arrival Distribution",
+                            labels={"x": "Month", "y": "Percentage of Students"}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                if historical_mos_distribution:
+                    st.write("### Historical MOS Distribution")
+                    mos_data = []
+                    for mos, percentage in historical_mos_distribution.items():
+                        mos_data.append({"MOS": mos, "Percentage": percentage * 100})
+                    
+                    fig = px.pie(
+                        mos_data,
+                        values="Percentage",
+                        names="MOS",
+                        title="Historical MOS Distribution"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
             
             st.success("Data successfully loaded and processed!")
             
@@ -128,6 +186,14 @@ def display_config_page():
                 'courses': []   # List of required courses (for AND)
             },
             'or_prerequisites': [],  # List of lists, each inner list is a set of OR prerequisites
+            'mos_paths': {
+                '18A': [],  # Officer path
+                '18B': [],  # Weapons Sergeant path
+                '18C': [],  # Engineer Sergeant path
+                '18D': [],  # Medical Sergeant path
+                '18E': []   # Communications Sergeant path
+            },
+            'required_for_all_mos': False,  # Whether this course is required for all MOS paths
             'max_capacity': default_class_size,
             'classes_per_year': default_classes_per_year,
             'reserved_seats': {
@@ -156,7 +222,18 @@ def display_config_page():
         }
         config['or_prerequisites'] = []
     
-    # Configure prerequisites
+    # Add MOS paths if they don't exist
+    if 'mos_paths' not in config:
+        config['mos_paths'] = {
+            '18A': [],
+            '18B': [],
+            '18C': [],
+            '18D': [],
+            '18E': []
+        }
+        config['required_for_all_mos'] = False
+    
+    # Configure prerequisite type
     st.subheader("Prerequisites")
     
     with st.expander("How Prerequisites Work"):
@@ -171,6 +248,8 @@ def display_config_page():
            - Courses that ALL must be completed (AND logic)
            - Groups of courses where ANY ONE from EACH group must be completed (OR logic within groups, AND logic between groups)
            
+        4. **MOS-Specific Paths**: Define different prerequisites for each MOS training path (18A, 18B, 18C, 18D, 18E)
+        
         #### Example:
         If you want to require either "Course A" OR "Course B", AND either "Course C" OR "Course D":
         1. Leave the "Student must complete ALL of these courses" field empty
@@ -178,105 +257,160 @@ def display_config_page():
         3. Create Group 2 with "Course C" and "Course D"
         """)
     
-    # Radio button to select prerequisite logic type
-    prereq_logic = st.radio(
-        "Prerequisite Logic", 
-        ["All Required (AND)", "Any Required (OR)", "Complex (AND/OR)"],
-        index=0 if config['prerequisites']['type'] == 'AND' and not config['or_prerequisites'] else 
-              1 if config['prerequisites']['type'] == 'OR' and not config['or_prerequisites'] else 2
+    prerequisite_type = st.radio(
+        "Prerequisite Configuration Method",
+        ["General Prerequisites", "MOS-Specific Paths"]
     )
     
     prerequisite_options = [c for c in unique_courses if c != selected_course]
     
-    if prereq_logic == "All Required (AND)":
-        # Simple AND logic - all courses must be taken
-        config['prerequisites']['type'] = 'AND'
-        selected_prerequisites = st.multiselect(
-            "Student must complete ALL of these courses:", 
-            prerequisite_options, 
-            default=config['prerequisites']['courses']
+    if prerequisite_type == "General Prerequisites":
+        # Use the existing AND/OR prerequisite system
+        prereq_logic = st.radio(
+            "Prerequisite Logic", 
+            ["All Required (AND)", "Any Required (OR)", "Complex (AND/OR)"],
+            index=0 if config['prerequisites']['type'] == 'AND' and not config['or_prerequisites'] else 
+                1 if config['prerequisites']['type'] == 'OR' and not config['or_prerequisites'] else 2
         )
-        config['prerequisites']['courses'] = selected_prerequisites
-        config['or_prerequisites'] = []  # Clear any OR prerequisites
         
-    elif prereq_logic == "Any Required (OR)":
-        # Simple OR logic - any course can be taken
-        config['prerequisites']['type'] = 'OR'
-        selected_prerequisites = st.multiselect(
-            "Student must complete ANY ONE of these courses:", 
-            prerequisite_options, 
-            default=config['prerequisites']['courses']
-        )
-        config['prerequisites']['courses'] = selected_prerequisites
-        config['or_prerequisites'] = []  # Clear any complex OR prerequisites
-        
-    else:  # Complex AND/OR
-        # For complex logic, we'll use the or_prerequisites structure
-        st.write("Define complex prerequisite relationships:")
-        
-        # First, define any required courses (AND logic)
-        and_prerequisites = st.multiselect(
-            "Student must complete ALL of these courses (leave empty if none):", 
-            prerequisite_options, 
-            default=config['prerequisites']['courses'] if config['prerequisites']['type'] == 'AND' else []
-        )
-        config['prerequisites'] = {
-            'type': 'AND',
-            'courses': and_prerequisites
-        }
-        
-        # Then, define sets of OR prerequisites
-        st.write("AND the student must complete at least one course from EACH of the following groups:")
-        
-        # Initialize or_prerequisites if needed
-        if 'or_prerequisites' not in config or not config['or_prerequisites']:
-            config['or_prerequisites'] = [[]]  # Start with one empty group
-        
-        # Display existing OR groups
-        or_groups = config['or_prerequisites'].copy()
-        updated_or_groups = []
-        
-        for i, group in enumerate(or_groups):
-            col1, col2 = st.columns([4, 1])
+        if prereq_logic == "All Required (AND)":
+            # Simple AND logic - all courses must be taken
+            config['prerequisites']['type'] = 'AND'
+            selected_prerequisites = st.multiselect(
+                "Student must complete ALL of these courses:", 
+                prerequisite_options, 
+                default=config['prerequisites']['courses']
+            )
+            config['prerequisites']['courses'] = selected_prerequisites
+            config['or_prerequisites'] = []  # Clear any OR prerequisites
             
-            with col1:
-                selected_or_courses = st.multiselect(
-                    f"Group {i+1}: Student must complete ANY ONE of these courses:",
-                    [c for c in prerequisite_options if c not in and_prerequisites],
-                    default=group
-                )
-                if selected_or_courses:  # Only add non-empty groups
-                    updated_or_groups.append(selected_or_courses)
+        elif prereq_logic == "Any Required (OR)":
+            # Simple OR logic - any course can be taken
+            config['prerequisites']['type'] = 'OR'
+            selected_prerequisites = st.multiselect(
+                "Student must complete ANY ONE of these courses:", 
+                prerequisite_options, 
+                default=config['prerequisites']['courses']
+            )
+            config['prerequisites']['courses'] = selected_prerequisites
+            config['or_prerequisites'] = []  # Clear any complex OR prerequisites
             
-            with col2:
-                if st.button(f"Remove Group {i+1}", key=f"remove_group_{i}"):
-                    pass  # We'll filter out this group by not adding it to updated_or_groups
+        else:  # Complex AND/OR
+            # For complex logic, we'll use the or_prerequisites structure
+            st.write("Define complex prerequisite relationships:")
+            
+            # First, define any required courses (AND logic)
+            and_prerequisites = st.multiselect(
+                "Student must complete ALL of these courses (leave empty if none):", 
+                prerequisite_options, 
+                default=config['prerequisites']['courses'] if config['prerequisites']['type'] == 'AND' else []
+            )
+            config['prerequisites'] = {
+                'type': 'AND',
+                'courses': and_prerequisites
+            }
+            
+            # Then, define sets of OR prerequisites
+            st.write("AND the student must complete at least one course from EACH of the following groups:")
+            
+            # Initialize or_prerequisites if needed
+            if 'or_prerequisites' not in config or not config['or_prerequisites']:
+                config['or_prerequisites'] = [[]]  # Start with one empty group
+            
+            # Display existing OR groups
+            or_groups = config['or_prerequisites'].copy()
+            updated_or_groups = []
+            
+            for i, group in enumerate(or_groups):
+                col1, col2 = st.columns([4, 1])
+                
+                with col1:
+                    selected_or_courses = st.multiselect(
+                        f"Group {i+1}: Student must complete ANY ONE of these courses:",
+                        [c for c in prerequisite_options if c not in and_prerequisites],
+                        default=group
+                    )
+                    if selected_or_courses:  # Only add non-empty groups
+                        updated_or_groups.append(selected_or_courses)
+                
+                with col2:
+                    if st.button(f"Remove Group {i+1}", key=f"remove_group_{i}"):
+                        pass  # We'll filter out this group by not adding it to updated_or_groups
+            
+            # Add a button to add a new OR group
+            if st.button("Add Another OR Group"):
+                updated_or_groups.append([])  # Add an empty group
+            
+            config['or_prerequisites'] = updated_or_groups
         
-        # Add a button to add a new OR group
-        if st.button("Add Another OR Group"):
-            updated_or_groups.append([])  # Add an empty group
+    else:  # MOS-Specific Paths
+        st.write("Configure prerequisites for each MOS training path:")
         
-        config['or_prerequisites'] = updated_or_groups
+        # Option to make this course required for all MOS paths
+        required_for_all = st.checkbox("This course is required for all MOS paths", 
+                                      value=config.get('required_for_all_mos', False))
+        config['required_for_all_mos'] = required_for_all
+        
+        if required_for_all:
+            st.info("This course will be required for all students regardless of MOS path.")
+        
+        # Configure MOS-specific prerequisites
+        mos_tabs = st.tabs(['18A (Officer)', '18B (Weapons)', '18C (Engineer)', '18D (Medical)', '18E (Communications)'])
+        
+        for i, mos in enumerate(['18A', '18B', '18C', '18D', '18E']):
+            with mos_tabs[i]:
+                st.write(f"Configure prerequisites for {mos} path:")
+                
+                # Check if this course is part of this MOS path
+                is_in_path = st.checkbox(f"This course is part of the {mos} training path", 
+                                        value=len(config['mos_paths'].get(mos, [])) > 0 or selected_course in config['mos_paths'].get(mos, []))
+                
+                if is_in_path:
+                    # If it's part of the path, configure prerequisites for this MOS
+                    mos_prereqs = st.multiselect(
+                        f"Prerequisites for {mos} path:",
+                        prerequisite_options,
+                        default=config['mos_paths'].get(mos, [])
+                    )
+                    config['mos_paths'][mos] = mos_prereqs
+                else:
+                    # If not part of this MOS path, clear prerequisites
+                    config['mos_paths'][mos] = []
     
     # Display the current prerequisite structure for clarity
     st.subheader("Current Prerequisites Configuration")
     
-    if prereq_logic == "All Required (AND)" and config['prerequisites']['courses']:
-        st.write("Student must complete ALL of these courses:")
-        st.write(", ".join(config['prerequisites']['courses']))
-    elif prereq_logic == "Any Required (OR)" and config['prerequisites']['courses']:
-        st.write("Student must complete ANY ONE of these courses:")
-        st.write(", ".join(config['prerequisites']['courses']))
-    else:
-        if config['prerequisites']['courses']:
+    if prerequisite_type == "General Prerequisites":
+        if prereq_logic == "All Required (AND)" and config['prerequisites']['courses']:
             st.write("Student must complete ALL of these courses:")
             st.write(", ".join(config['prerequisites']['courses']))
+        elif prereq_logic == "Any Required (OR)" and config['prerequisites']['courses']:
+            st.write("Student must complete ANY ONE of these courses:")
+            st.write(", ".join(config['prerequisites']['courses']))
+        else:
+            if config['prerequisites']['courses']:
+                st.write("Student must complete ALL of these courses:")
+                st.write(", ".join(config['prerequisites']['courses']))
+            
+            if config['or_prerequisites']:
+                st.write("AND at least one course from EACH of these groups:")
+                for i, group in enumerate(config['or_prerequisites']):
+                    if group:  # Only show non-empty groups
+                        st.write(f"Group {i+1}: {' OR '.join(group)}")
+    else:  # MOS-Specific Paths
+        if config['required_for_all_mos']:
+            st.write("This course is required for all MOS paths.")
         
-        if config['or_prerequisites']:
-            st.write("AND at least one course from EACH of these groups:")
-            for i, group in enumerate(config['or_prerequisites']):
-                if group:  # Only show non-empty groups
-                    st.write(f"Group {i+1}: {' OR '.join(group)}")
+        st.write("MOS-specific prerequisites:")
+        for mos in ['18A', '18B', '18C', '18D', '18E']:
+            prereqs = config['mos_paths'].get(mos, [])
+            if prereqs:
+                st.write(f"{mos}: {', '.join(prereqs)}")
+            else:
+                if config['required_for_all_mos']:
+                    st.write(f"{mos}: No additional prerequisites")
+                else:
+                    st.write(f"{mos}: Not in this training path")
     
     # Configure capacity
     st.subheader("Class Capacity")
@@ -456,25 +590,25 @@ def display_schedule_builder():
             if st.button("1 Week"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=7)
-                st.rerun()
+                st.experimental_rerun()
         
         with col2:
             if st.button("2 Weeks"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=14)
-                st.rerun()
+                st.experimental_rerun()
         
         with col3:
             if st.button("1 Month"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=30)
-                st.rerun()
+                st.experimental_rerun()
         
         with col4:
             if st.button(f"Historical ({default_duration} days)"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=default_duration)
-                st.rerun()
+                st.experimental_rerun()
     
     # Date and size inputs
     col1, col2, col3 = st.columns(3)
@@ -517,6 +651,48 @@ def display_schedule_builder():
                 if duration_days < hist_duration * 0.7 or duration_days > hist_duration * 1.3:
                     st.warning(f"The selected duration ({duration_days} days) is significantly different from the historical average ({hist_duration:.1f} days).")
     
+    # Add Training MOS allocation
+    st.subheader("Training MOS Allocation")
+    st.write("Specify the number of seats reserved for each MOS path:")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    mos_allocation = {}
+    total_allocated = 0
+    
+    with col1:
+        mos_18a = st.number_input("18A (Officer)", min_value=0, max_value=int(class_size), value=0)
+        mos_allocation['18A'] = mos_18a
+        total_allocated += mos_18a
+        
+    with col2:
+        mos_18b = st.number_input("18B (Weapons)", min_value=0, max_value=int(class_size), value=0)
+        mos_allocation['18B'] = mos_18b
+        total_allocated += mos_18b
+        
+    with col3:
+        mos_18c = st.number_input("18C (Engineer)", min_value=0, max_value=int(class_size), value=0)
+        mos_allocation['18C'] = mos_18c
+        total_allocated += mos_18c
+        
+    with col4:
+        mos_18d = st.number_input("18D (Medical)", min_value=0, max_value=int(class_size), value=0)
+        mos_allocation['18D'] = mos_18d
+        total_allocated += mos_18d
+        
+    with col5:
+        mos_18e = st.number_input("18E (Communications)", min_value=0, max_value=int(class_size), value=0)
+        mos_allocation['18E'] = mos_18e
+        total_allocated += mos_18e
+    
+    # Validate MOS allocation
+    if total_allocated > class_size:
+        st.error(f"Total MOS allocation ({total_allocated}) exceeds class size ({class_size}).")
+    elif total_allocated < class_size:
+        st.warning(f"Total MOS allocation ({total_allocated}) is less than class size ({class_size}). {class_size - total_allocated} seats are unallocated.")
+    else:
+        st.success(f"MOS allocation complete ({total_allocated}/{class_size} seats allocated)")
+
     # Validate dates
     if class_start_date >= class_end_date:
         st.error("Class end date must be after start date.")
@@ -528,6 +704,7 @@ def display_schedule_builder():
                 "start_date": class_start_date.strftime("%Y-%m-%d"),
                 "end_date": class_end_date.strftime("%Y-%m-%d"),
                 "size": int(class_size),  # Ensure it's stored as int
+                "mos_allocation": mos_allocation,
                 "id": len(st.session_state.future_schedule) + 1
             }
             
@@ -619,8 +796,11 @@ def display_schedule_builder():
                     end_date = row['end_date']
                     duration_days = (end_date - start_date).days
                     
-                    # Debug info
-                    st.write(f"Adding class {class_id}: {course} - {start_date} to {end_date} ({duration_days} days)")
+                    # Get MOS allocation if available
+                    mos_info = ""
+                    if 'mos_allocation' in row:
+                        mos_alloc = row['mos_allocation']
+                        mos_info = "<br>MOS: " + ", ".join([f"{mos}: {count}" for mos, count in mos_alloc.items() if count > 0])
                     
                     # Add bar for class using scatter with lines
                     fig.add_trace(go.Scatter(
@@ -629,7 +809,7 @@ def display_schedule_builder():
                         mode='lines',
                         line=dict(color=color_map[course], width=20),
                         name=f"{course} (Class {class_id})",
-                        text=f"Class {class_id}: {course}<br>Start: {start_date.strftime('%Y-%m-%d')}<br>End: {end_date.strftime('%Y-%m-%d')}<br>Size: {row['size']}",
+                        text=f"Class {class_id}: {course}<br>Start: {start_date.strftime('%Y-%m-%d')}<br>End: {end_date.strftime('%Y-%m-%d')}<br>Size: {row['size']}{mos_info}",
                         hoverinfo='text'
                     ))
                     
@@ -649,6 +829,16 @@ def display_schedule_builder():
                         title="Date",
                         type='date',
                         tickformat='%Y-%m-%d',
+                        rangeselector=dict(
+                            buttons=list([
+                                dict(count=1, label="1m", step="month", stepmode="backward"),
+                                dict(count=6, label="6m", step="month", stepmode="backward"),
+                                dict(count=1, label="YTD", step="year", stepmode="todate"),
+                                dict(count=1, label="1y", step="year", stepmode="backward"),
+                                dict(step="all")
+                            ])
+                        ),
+                        rangeslider=dict(visible=True)
                     ),
                     yaxis=dict(
                         title="Course",
@@ -670,8 +860,22 @@ def display_schedule_builder():
             st.error(f"Error generating Gantt chart: {e}")
             st.write("Please check your schedule data format.")
         
-        # Schedule table view
-        st.dataframe(schedule_df[['id', 'course_title', 'start_date', 'end_date', 'size']])
+        # Schedule table view with new columns
+        st.subheader("Schedule Table")
+        if not schedule_df.empty:
+            # Create a display version of the dataframe with formatted MOS allocation
+            display_df = schedule_df.copy()
+            
+            # Format MOS allocation as a string for display
+            if 'mos_allocation' in display_df.columns:
+                display_df['MOS Allocation'] = display_df['mos_allocation'].apply(
+                    lambda x: ", ".join([f"{mos}: {count}" for mos, count in x.items() if count > 0]) if isinstance(x, dict) else ""
+                )
+            
+            # Select columns to display
+            display_columns = ['id', 'course_title', 'start_date', 'end_date', 'MOS Allocation', 'size']
+            
+            st.dataframe(display_df[display_columns])
         
         # Remove class button
         class_to_remove = st.selectbox("Select class to remove", 
@@ -681,9 +885,60 @@ def display_schedule_builder():
         if st.button("Remove Class"):
             st.session_state.future_schedule = [c for c in st.session_state.future_schedule if c['id'] != class_to_remove]
             st.success(f"Removed class with ID {class_to_remove}")
-            st.rerun()
+            st.experimental_rerun()
     else:
         st.info("No classes scheduled yet. Add classes using the form above.")
+    
+    # Add a button to add test data if needed
+    with st.expander("Debug Tools"):
+        if st.button("Add Test Data"):
+            test_data = [
+                {
+                    "course_title": "Test Course 1",
+                    "start_date": (datetime.date.today()).strftime("%Y-%m-%d"),
+                    "end_date": (datetime.date.today() + datetime.timedelta(days=14)).strftime("%Y-%m-%d"),
+                    "size": 30,
+                    "mos_allocation": {'18A': 5, '18B': 10, '18C': 5, '18D': 5, '18E': 5},
+                    "id": 999
+                },
+                {
+                    "course_title": "Test Course 2",
+                    "start_date": (datetime.date.today() + datetime.timedelta(days=7)).strftime("%Y-%m-%d"),
+                    "end_date": (datetime.date.today() + datetime.timedelta(days=21)).strftime("%Y-%m-%d"),
+                    "size": 25,
+                    "mos_allocation": {'18A': 5, '18B': 5, '18C': 5, '18D': 5, '18E': 5},
+                    "id": 998
+                }
+            ]
+            st.session_state.future_schedule.extend(test_data)
+            st.success("Test data added. Please refresh the page.")
+        
+        if st.button("Debug: Fix Schedule Date Formats"):
+            fixed_schedule = []
+            for class_item in st.session_state.future_schedule:
+                # Ensure dates are in string format YYYY-MM-DD
+                try:
+                    start_date = pd.to_datetime(class_item['start_date']).strftime('%Y-%m-%d')
+                    end_date = pd.to_datetime(class_item['end_date']).strftime('%Y-%m-%d')
+                    
+                    fixed_item = {
+                        'id': class_item['id'],
+                        'course_title': class_item['course_title'],
+                        'start_date': start_date,
+                        'end_date': end_date,
+                        'size': int(class_item['size'])
+                    }
+                    
+                    # Copy MOS allocation if it exists
+                    if 'mos_allocation' in class_item:
+                        fixed_item['mos_allocation'] = class_item['mos_allocation']
+                    
+                    fixed_schedule.append(fixed_item)
+                except Exception as e:
+                    st.error(f"Error fixing class {class_item.get('id')}: {e}")
+            
+            st.session_state.future_schedule = fixed_schedule
+            st.success("Schedule date formats fixed. Please refresh the page.")
     
     # Save/load schedule
     st.subheader("Save/Load Schedule")
@@ -727,6 +982,17 @@ def display_schedule_builder():
                                 'courses': config['prerequisites']
                             }
                             config['or_prerequisites'] = []
+                        
+                        # Add MOS paths if they don't exist
+                        if 'mos_paths' not in config:
+                            config['mos_paths'] = {
+                                '18A': [],
+                                '18B': [],
+                                '18C': [],
+                                '18D': [],
+                                '18E': []
+                            }
+                            config['required_for_all_mos'] = False
                     
                     st.session_state.course_configs.update(loaded_data['configurations'])
                     st.session_state.future_schedule = loaded_data['schedule']
@@ -735,7 +1001,7 @@ def display_schedule_builder():
                     st.session_state.future_schedule = loaded_data
                 
                 st.success("Schedule loaded successfully!")
-                st.rerun()
+                st.experimental_rerun()
             except Exception as e:
                 st.error(f"Error loading schedule: {e}")
 
@@ -745,6 +1011,13 @@ def display_simulation_page():
     if not st.session_state.future_schedule:
         st.warning("Please build a schedule before running simulations.")
         return
+    
+    # Option to use historical data for simulation settings
+    use_historical_data = st.checkbox(
+        "Use historical data for simulation settings", 
+        value=True,
+        help="When enabled, the simulation will use patterns from historical data for student arrivals, MOS distribution, and pass rates."
+    )
     
     # Simulation settings
     st.subheader("Simulation Settings")
@@ -757,12 +1030,184 @@ def display_simulation_page():
     with col2:
         num_iterations = st.number_input("Number of simulation iterations", min_value=1, value=10)
     
+    # Student arrival settings
+    st.subheader("Student Arrival Settings")
+    
+    # Historical arrival patterns
+    historical_arrival_patterns = None
+    historical_mos_distribution = None
+    
+    if use_historical_data and 'processed_data' in st.session_state and st.session_state.processed_data is not None:
+        try:
+            # Get historical patterns from session state if available
+            if 'historical_arrival_patterns' in st.session_state:
+                historical_arrival_patterns = st.session_state.historical_arrival_patterns
+            
+            if 'historical_mos_distribution' in st.session_state:
+                historical_mos_distribution = st.session_state.historical_mos_distribution
+            
+            # If not in session state, try to extract them now
+            if not historical_arrival_patterns:
+                historical_arrival_patterns = extract_historical_arrival_patterns(st.session_state.processed_data)
+                st.session_state.historical_arrival_patterns = historical_arrival_patterns
+            
+            if not historical_mos_distribution:
+                historical_mos_distribution = extract_historical_mos_distribution(st.session_state.processed_data)
+                st.session_state.historical_mos_distribution = historical_mos_distribution
+            
+            # Display historical patterns
+            with st.expander("Historical Data Patterns"):
+                if historical_arrival_patterns:
+                    st.write("### Historical Arrival Patterns")
+                    st.write(f"Average days before class start: {historical_arrival_patterns.get('avg_days_before', 'N/A')}")
+                    
+                    # Show monthly distribution
+                    monthly_data = historical_arrival_patterns.get('monthly_distribution', {})
+                    if monthly_data:
+                        months = list(monthly_data.keys())
+                        values = list(monthly_data.values())
+                        
+                        fig = px.bar(
+                            x=months, 
+                            y=values,
+                            title="Historical Monthly Arrival Distribution",
+                            labels={"x": "Month", "y": "Percentage of Students"}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                if historical_mos_distribution:
+                    st.write("### Historical MOS Distribution")
+                    mos_data = []
+                    for mos, percentage in historical_mos_distribution.items():
+                        mos_data.append({"MOS": mos, "Percentage": percentage * 100})
+                    
+                    fig = px.pie(
+                        mos_data,
+                        values="Percentage",
+                        names="MOS",
+                        title="Historical MOS Distribution"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.warning(f"Error extracting historical patterns: {e}")
+            historical_arrival_patterns = None
+            historical_mos_distribution = None
+    
+    # Only show these options if not using historical data or if historical data extraction failed
+    if not use_historical_data or not historical_arrival_patterns:
+        arrival_method = st.radio(
+            "Student arrival method",
+            ["Before each class", "Continuous throughout the year"]
+        )
+        
+        if arrival_method == "Before each class":
+            arrival_days_before = st.number_input(
+                "Days before class start that students arrive", 
+                min_value=0, 
+                max_value=30, 
+                value=3,
+                help="Students will arrive this many days before their first class starts"
+            )
+        else:
+            # For continuous arrivals, allow setting a pattern
+            st.write("Students will arrive throughout the simulation period:")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                monthly_distribution = st.selectbox(
+                    "Monthly arrival pattern",
+                    ["Even", "Summer heavy", "Winter heavy", "Custom"]
+                )
+            
+            with col2:
+                arrival_randomness = st.slider(
+                    "Arrival randomness",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.3,
+                    help="Higher values mean more random/uneven arrivals"
+                )
+                
+            if monthly_distribution == "Custom":
+                st.write("Set the relative percentage of students arriving each month:")
+                
+                months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                month_cols = st.columns(6)
+                
+                custom_distribution = {}
+                for i, month in enumerate(months):
+                    col_idx = i % 6
+                    with month_cols[col_idx]:
+                        custom_distribution[month] = st.slider(
+                            month, 
+                            min_value=0, 
+                            max_value=100, 
+                            value=100 // 12,  # Default to even distribution
+                            help=f"Relative percentage for {month}"
+                        )
+                
+                # Normalize to make sure they sum to 100%
+                total = sum(custom_distribution.values())
+                if total > 0:
+                    for month in custom_distribution:
+                        custom_distribution[month] = custom_distribution[month] / total
+    
     # Advanced settings expander
     with st.expander("Advanced Simulation Settings"):
+        # MOS Distribution
+        st.write("MOS Distribution (percentage of students in each path):")
+        
+        # Use historical MOS distribution if available and selected
+        if use_historical_data and historical_mos_distribution:
+            st.info("Using historical MOS distribution data")
+            mos_distribution = historical_mos_distribution.copy()
+            
+            # Display the historical distribution but allow adjustments
+            mos_cols = st.columns(5)
+            
+            with mos_cols[0]:
+                mos_distribution['18A'] = st.slider("18A (Officer)", 0, 100, 
+                                                  int(historical_mos_distribution.get('18A', 0.2) * 100)) / 100
+            with mos_cols[1]:
+                mos_distribution['18B'] = st.slider("18B (Weapons)", 0, 100, 
+                                                  int(historical_mos_distribution.get('18B', 0.2) * 100)) / 100
+            with mos_cols[2]:
+                mos_distribution['18C'] = st.slider("18C (Engineer)", 0, 100, 
+                                                  int(historical_mos_distribution.get('18C', 0.2) * 100)) / 100
+            with mos_cols[3]:
+                mos_distribution['18D'] = st.slider("18D (Medical)", 0, 100, 
+                                                  int(historical_mos_distribution.get('18D', 0.2) * 100)) / 100
+            with mos_cols[4]:
+                mos_distribution['18E'] = st.slider("18E (Communications)", 0, 100, 
+                                                  int(historical_mos_distribution.get('18E', 0.2) * 100)) / 100
+        else:
+            # Manual MOS distribution
+            mos_distribution = {}
+            mos_cols = st.columns(5)
+            
+            with mos_cols[0]:
+                mos_distribution['18A'] = st.slider("18A (Officer)", 0, 100, 20) / 100
+            with mos_cols[1]:
+                mos_distribution['18B'] = st.slider("18B (Weapons)", 0, 100, 20) / 100
+            with mos_cols[2]:
+                mos_distribution['18C'] = st.slider("18C (Engineer)", 0, 100, 20) / 100
+            with mos_cols[3]:
+                mos_distribution['18D'] = st.slider("18D (Medical)", 0, 100, 20) / 100
+            with mos_cols[4]:
+                mos_distribution['18E'] = st.slider("18E (Communications)", 0, 100, 20) / 100
+        
+        # Normalize MOS distribution
+        total = sum(mos_distribution.values())
+        if total > 0:
+            normalized_mos_distribution = {mos: value / total for mos, value in mos_distribution.items()}
+        else:
+            normalized_mos_distribution = {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+        
+        # Rest of advanced settings
         randomize_factor = st.slider("Randomization Factor", min_value=0.0, max_value=1.0, value=0.1, 
                                     help="How much to randomize historical rates in simulation")
         
-        st.write("Override Historical Pass Rates:")
+        st.write("Course Pass Rates:")
         override_rates = {}
         
         # Create 3 columns to fit more courses per row
@@ -780,23 +1225,30 @@ def display_simulation_page():
     if st.button("Run Simulation"):
         with st.spinner("Running simulation..."):
             # Prepare inputs for simulation
-            course_configs_copy = copy.deepcopy(st.session_state.course_configs)
-            
-            # Apply backward compatibility to all configurations
-            for course, config in course_configs_copy.items():
-                if 'officer_enlisted_ratio' in config:
-                    if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
-                        config['officer_enlisted_ratio'] = None
-            
             simulation_inputs = {
                 'schedule': st.session_state.future_schedule,
-                'course_configs': course_configs_copy,
+                'course_configs': st.session_state.course_configs,
                 'historical_data': st.session_state.historical_analysis,
                 'num_students': num_students,
                 'num_iterations': num_iterations,
+                'use_historical_data': use_historical_data,
+                'historical_arrival_patterns': historical_arrival_patterns,
+                'historical_mos_distribution': normalized_mos_distribution,
                 'randomize_factor': randomize_factor,
                 'override_rates': override_rates
             }
+            
+            # If not using historical data, add manual settings
+            if not use_historical_data or not historical_arrival_patterns:
+                if arrival_method == "Before each class":
+                    simulation_inputs['arrival_method'] = 'before_class'
+                    simulation_inputs['arrival_days_before'] = arrival_days_before
+                else:
+                    simulation_inputs['arrival_method'] = 'continuous'
+                    simulation_inputs['monthly_distribution'] = monthly_distribution
+                    simulation_inputs['arrival_randomness'] = arrival_randomness
+                    if monthly_distribution == "Custom":
+                        simulation_inputs['custom_distribution'] = custom_distribution
             
             # Run simulation
             simulation_results = run_simulation(simulation_inputs)
@@ -822,7 +1274,7 @@ def display_simulation_page():
             st.metric("Resource Utilization", f"{results['resource_utilization']:.1%}")
         
         # Tabs for different visualizations
-        tab1, tab2, tab3, tab4 = st.tabs(["Bottlenecks", "Student Flow", "Class Utilization", "Detailed Metrics"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Bottlenecks", "Student Flow", "Class Utilization", "MOS Analysis", "Detailed Metrics"])
         
         with tab1:
             st.subheader("Bottleneck Analysis")
@@ -871,6 +1323,68 @@ def display_simulation_page():
                 st.write("No classes with low utilization found.")
         
         with tab4:
+            st.subheader("MOS Path Analysis")
+            
+            if 'mos_metrics' in results:
+                mos_data = results['mos_metrics']
+                
+                # Create DataFrame for MOS metrics
+                mos_df = pd.DataFrame([
+                    {
+                        'MOS': mos,
+                        'Count': data['count'],
+                        'Avg Completion Time (days)': data['avg_completion_time'],
+                        'Avg Wait Time (days)': data['avg_wait_time']
+                    }
+                    for mos, data in mos_data.items()
+                ])
+                
+                # Display MOS metrics table
+                st.dataframe(mos_df)
+                
+                # Create visualization for MOS metrics
+                fig = px.bar(
+                    mos_df, 
+                    x='MOS', 
+                    y=['Avg Completion Time (days)', 'Avg Wait Time (days)'],
+                    barmode='group',
+                    title='Average Completion and Wait Times by MOS',
+                    height=400
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # MOS utilization across classes
+                st.subheader("MOS Utilization by Class")
+                
+                if 'class_mos_utilization' in results:
+                    mos_util_data = []
+                    
+                    for class_util in results['class_mos_utilization']:
+                        course = class_util['course']
+                        for mos, util in class_util['mos_utilization'].items():
+                            mos_util_data.append({
+                                'Course': course,
+                                'MOS': mos,
+                                'Utilization': util
+                            })
+                    
+                    if mos_util_data:
+                        mos_util_df = pd.DataFrame(mos_util_data)
+                        
+                        # Create heatmap of MOS utilization
+                        fig = px.density_heatmap(
+                            mos_util_df, 
+                            x='Course', 
+                            y='MOS', 
+                            z='Utilization',
+                            title='MOS Seat Utilization by Course',
+                            height=500
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No MOS-specific data available in simulation results. Try running the simulation again with MOS paths enabled.")
+        
+        with tab5:
             st.subheader("Detailed Metrics")
             
             # Detailed metrics table
@@ -885,6 +1399,91 @@ def display_simulation_page():
                 file_name="simulation_results.csv",
                 mime="text/csv"
             )
+        
+        # If using historical data, show comparison between historical and simulated patterns
+        if use_historical_data and historical_arrival_patterns:
+            with st.expander("Historical vs. Simulated Patterns"):
+                st.write("### Comparison of Historical and Simulated Patterns")
+                
+                # Create two columns for comparison
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("#### Historical Patterns")
+                    
+                    if historical_arrival_patterns:
+                        st.write(f"Average arrival days before class: {historical_arrival_patterns.get('avg_days_before', 'N/A')}")
+                        
+                        # Show historical monthly distribution
+                        if 'monthly_distribution' in historical_arrival_patterns:
+                            monthly_data = historical_arrival_patterns['monthly_distribution']
+                            months = list(monthly_data.keys())
+                            values = list(monthly_data.values())
+                            
+                            fig = px.bar(
+                                x=months, 
+                                y=values,
+                                title="Historical Monthly Arrival Distribution",
+                                labels={"x": "Month", "y": "Percentage"}
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    if historical_mos_distribution:
+                        st.write("#### Historical MOS Distribution")
+                        mos_data = []
+                        for mos, percentage in historical_mos_distribution.items():
+                            mos_data.append({"MOS": mos, "Percentage": percentage * 100})
+                        
+                        fig = px.pie(
+                            mos_data,
+                            values="Percentage",
+                            names="MOS",
+                            title="Historical MOS Distribution"
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    st.write("#### Simulated Patterns")
+                    
+                    # Get simulated arrival patterns from results
+                    if 'arrival_patterns' in results:
+                        arrival_patterns = results['arrival_patterns']
+                        
+                        st.write(f"Average arrival days before class: {arrival_patterns.get('avg_days_before', 'N/A')}")
+                        
+                        # Show simulated monthly distribution
+                        if 'monthly_distribution' in arrival_patterns:
+                            monthly_data = arrival_patterns['monthly_distribution']
+                            months = list(monthly_data.keys())
+                            values = list(monthly_data.values())
+                            
+                            fig = px.bar(
+                                x=months, 
+                                y=values,
+                                title="Simulated Monthly Arrival Distribution",
+                                labels={"x": "Month", "y": "Percentage"}
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Get simulated MOS distribution from results
+                    if 'mos_metrics' in results:
+                        mos_metrics = results['mos_metrics']
+                        
+                        mos_data = []
+                        total_students = sum(metrics.get('count', 0) for metrics in mos_metrics.values())
+                        
+                        for mos, metrics in mos_metrics.items():
+                            count = metrics.get('count', 0)
+                            percentage = count / total_students * 100 if total_students > 0 else 0
+                            mos_data.append({"MOS": mos, "Percentage": percentage})
+                        
+                        fig = px.pie(
+                            mos_data,
+                            values="Percentage",
+                            names="MOS",
+                            title="Simulated MOS Distribution"
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
 
 def display_optimization_page():
     st.header("Schedule Optimization")
@@ -937,6 +1536,12 @@ def display_optimization_page():
             value=False,
             help="Allow the optimizer to suggest changes to prerequisite relationships"
         )
+        
+        allow_mos_allocation_changes = st.checkbox(
+            "Allow MOS Allocation Changes", 
+            value=True,
+            help="Allow the optimizer to suggest changes to MOS allocations"
+        )
     
     # Run optimization button
     if st.button("Run Optimization"):
@@ -960,7 +1565,8 @@ def display_optimization_page():
                 'constraint_weight': constraint_weight,
                 'allow_capacity_changes': allow_capacity_changes,
                 'allow_duration_changes': allow_duration_changes,
-                'allow_prerequisite_changes': allow_prerequisite_changes
+                'allow_prerequisite_changes': allow_prerequisite_changes,
+                'allow_mos_allocation_changes': allow_mos_allocation_changes
             }
             
             # Run optimization
@@ -1010,7 +1616,7 @@ def display_optimization_page():
         changes = results['recommended_changes']
         
         # Tabs for different types of changes
-        tab1, tab2, tab3, tab4 = st.tabs(["Schedule Changes", "Capacity Changes", "Prerequisite Changes", "Other Recommendations"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Schedule Changes", "Capacity Changes", "MOS Allocation", "Prerequisite Changes", "Other Recommendations"])
         
         with tab1:
             schedule_changes = pd.DataFrame(changes['schedule_changes'])
@@ -1066,13 +1672,67 @@ def display_optimization_page():
                 st.write("No capacity changes recommended.")
         
         with tab3:
+            mos_allocation_changes = pd.DataFrame(changes.get('mos_allocation_changes', []))
+            if not mos_allocation_changes.empty:
+                st.dataframe(mos_allocation_changes)
+                
+                # Visualization of MOS allocation changes
+                if len(mos_allocation_changes) > 0:
+                    # Create a long-form dataframe for easier plotting
+                    plot_data = []
+                    for _, row in mos_allocation_changes.iterrows():
+                        course = row['course']
+                        class_id = row['class_id']
+                        
+                        for mos in ['18A', '18B', '18C', '18D', '18E']:
+                            # Original allocation
+                            original = row.get(f'original_{mos}', 0)
+                            plot_data.append({
+                                'Course': f"{course} (ID:{class_id})",
+                                'MOS': mos,
+                                'Type': 'Original',
+                                'Seats': original
+                            })
+                            
+                            # Recommended allocation
+                            recommended = row.get(f'recommended_{mos}', 0)
+                            plot_data.append({
+                                'Course': f"{course} (ID:{class_id})",
+                                'MOS': mos,
+                                'Type': 'Recommended',
+                                'Seats': recommended
+                            })
+                    
+                    plot_df = pd.DataFrame(plot_data)
+                    
+                    fig = px.bar(
+                        plot_df,
+                        x='MOS',
+                        y='Seats',
+                        color='Type',
+                        facet_col='Course',
+                        title="MOS Allocation Changes",
+                        barmode='group'
+                    )
+                    
+                    # Adjust layout for better readability
+                    fig.update_layout(
+                        height=400 * (len(mos_allocation_changes) // 2 + 1),
+                        margin=dict(t=100, b=50)
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.write("No MOS allocation changes recommended.")
+        
+        with tab4:
             prerequisite_changes = pd.DataFrame(changes['prerequisite_changes'])
             if not prerequisite_changes.empty:
                 st.dataframe(prerequisite_changes)
             else:
                 st.write("No prerequisite changes recommended.")
         
-        with tab4:
+        with tab5:
             other_recommendations = changes['other_recommendations']
             for i, rec in enumerate(other_recommendations, 1):
                 st.write(f"{i}. {rec}")
