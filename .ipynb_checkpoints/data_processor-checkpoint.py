@@ -42,7 +42,16 @@ def process_data(raw_data):
     # Make a copy to avoid modifying the original
     data = raw_data.copy()
     
-    # Convert date columns to datetime
+    # Check for required columns
+    required_columns = ['FY', 'Course Title', 'SSN', 'Cls Start Date', 'Cls End Date']
+    missing_columns = [col for col in required_columns if col not in data.columns]
+    
+    if missing_columns:
+        error_msg = f"Missing required columns: {', '.join(missing_columns)}"
+        st.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # Convert date columns to datetime - use column names, not positions
     date_columns = ['Cls Start Date', 'Cls End Date', 'Input Date', 'Output Date']
     
     # Add Arrival Date to date columns if it exists
@@ -54,39 +63,40 @@ def process_data(raw_data):
             data[col] = pd.to_datetime(data[col], errors='coerce')
     
     # Group by student (SSN) to identify each student's first class
-    student_groups = data.groupby('SSN')
-    
-    # If Arrival Date doesn't exist or has missing values, add/update it
-    if 'Arrival Date' not in data.columns:
-        # Create the column
-        data['Arrival Date'] = pd.NaT
-        st.warning("Arrival Date column not found. Estimating arrival as 3 weeks before each student's first class.")
-    
-    # Process each student
-    for ssn, student_data in student_groups:
-        # Sort by class start date to find first class
-        sorted_classes = student_data.sort_values('Cls Start Date')
+    if 'SSN' in data.columns:
+        student_groups = data.groupby('SSN')
         
-        if len(sorted_classes) > 0:
-            first_class_start = sorted_classes.iloc[0]['Cls Start Date']
-            
-            # Check each row for this student
-            for idx in sorted_classes.index:
-                # If arrival date is missing or invalid (after class start)
-                if pd.isna(data.loc[idx, 'Arrival Date']) or data.loc[idx, 'Arrival Date'] > data.loc[idx, 'Cls Start Date']:
-                    # Set arrival date to 3 weeks (21 days) before first class
-                    data.loc[idx, 'Arrival Date'] = first_class_start - pd.Timedelta(days=21)
+        # If Arrival Date doesn't exist or has missing values, add/update it
+        if 'Arrival Date' not in data.columns:
+            # Create the column
+            data['Arrival Date'] = pd.NaT
+            st.warning("Arrival Date column not found. Estimating arrival as 3 weeks before each student's first class.")
+        
+        # Process each student
+        for ssn, student_data in student_groups:
+            # Sort by class start date to find first class
+            if 'Cls Start Date' in student_data.columns:
+                sorted_classes = student_data.sort_values('Cls Start Date')
+                
+                if len(sorted_classes) > 0:
+                    first_class_start = sorted_classes.iloc[0]['Cls Start Date']
+                    
+                    # Check each row for this student
+                    for idx in sorted_classes.index:
+                        # If arrival date is missing or invalid (after class start)
+                        if pd.isna(data.loc[idx, 'Arrival Date']) or data.loc[idx, 'Arrival Date'] > data.loc[idx, 'Cls Start Date']:
+                            # Set arrival date to 3 weeks (21 days) before first class
+                            data.loc[idx, 'Arrival Date'] = first_class_start - pd.Timedelta(days=21)
     
-    # Perform a final check to ensure all arrival dates are before class start dates
-    # and flag any issues
-    invalid_arrivals = data[data['Arrival Date'] > data['Cls Start Date']]
-    if len(invalid_arrivals) > 0:
-        st.warning(f"Found {len(invalid_arrivals)} records with arrival dates after class start dates. These have been corrected.")
-        # Fix any remaining invalid arrival dates
-        data.loc[invalid_arrivals.index, 'Arrival Date'] = data.loc[invalid_arrivals.index, 'Cls Start Date'] - pd.Timedelta(days=1)
-    
-    # Calculate days between arrival and class start
-    data['Days Before Class'] = (data['Cls Start Date'] - data['Arrival Date']).dt.days
+        # Perform a final check to ensure all arrival dates are before class start dates
+        invalid_arrivals = data[data['Arrival Date'] > data['Cls Start Date']]
+        if len(invalid_arrivals) > 0:
+            st.warning(f"Found {len(invalid_arrivals)} records with arrival dates after class start dates. These have been corrected.")
+            # Fix any remaining invalid arrival dates
+            data.loc[invalid_arrivals.index, 'Arrival Date'] = data.loc[invalid_arrivals.index, 'Cls Start Date'] - pd.Timedelta(days=1)
+        
+        # Calculate days between arrival and class start
+        data['Days Before Class'] = (data['Cls Start Date'] - data['Arrival Date']).dt.days
     
     # Calculate class duration
     data['Duration'] = (data['Cls End Date'] - data['Cls Start Date']).dt.days
@@ -94,102 +104,98 @@ def process_data(raw_data):
     # Determine student status based on the correct status codes
     
     # Determine if a student started a class (I=New Input, J=Retrainee In, Q=Recycle In)
-    data['Started'] = data['Input Stat'].isin(['I', 'J', 'Q'])
+    if 'Input Stat' in data.columns:
+        data['Started'] = data['Input Stat'].isin(['I', 'J', 'Q'])
+    else:
+        data['Started'] = True  # Assume started if no input status
     
     # Determine if a student graduated (G=Graduate)
-    data['Graduated'] = data['Out Stat'] == 'G'
+    if 'Out Stat' in data.columns:
+        data['Graduated'] = data['Out Stat'] == 'G'
+    else:
+        data['Graduated'] = False  # Assume not graduated if no output status
     
     # Determine if a student recycled (L=Recycle Out)
-    data['Recycled'] = data['Out Stat'] == 'L'
+    if 'Out Stat' in data.columns:
+        data['Recycled'] = data['Out Stat'] == 'L'
+    else:
+        data['Recycled'] = False
     
     # Determine if a student was a no-show (N=No Show)
-    data['NoShow'] = data['Input Stat'] == 'N'
+    if 'Input Stat' in data.columns:
+        data['NoShow'] = data['Input Stat'] == 'N'
+    else:
+        data['NoShow'] = False
     
     # Determine if a student was retrainee out (K=Retrainee Out)
-    data['RetraineeOut'] = data['Out Stat'] == 'K'
+    if 'Out Stat' in data.columns:
+        data['RetraineeOut'] = data['Out Stat'] == 'K'
+    else:
+        data['RetraineeOut'] = False
     
     # Determine if a reservation was cancelled (C=Cancelled Reservation)
-    data['Cancelled'] = data['Res Stat'] == 'C'
+    if 'Res Stat' in data.columns:
+        data['Cancelled'] = data['Res Stat'] == 'C'
+    else:
+        data['Cancelled'] = False
     
     # Determine if a student failed or had non-successful completion (Z=Non-Successful Completion)
-    data['Failed'] = data['Out Stat'] == 'Z'
+    if 'Out Stat' in data.columns:
+        data['Failed'] = data['Out Stat'] == 'Z'
+    else:
+        data['Failed'] = False
     
     # Extract personnel type (Officer vs Enlisted)
-    data['PersonnelType'] = data['CP Pers Type'].map({'O': 'Officer', 'E': 'Enlisted'})
+    if 'CP Pers Type' in data.columns:
+        data['PersonnelType'] = data['CP Pers Type'].map({'O': 'Officer', 'E': 'Enlisted'})
+    else:
+        data['PersonnelType'] = 'Unknown'
     
     # Extract group type (Active Duty, National Guard, etc.)
-    data['GroupType'] = data['Group Type']
-    
-    # Try to extract or infer Training MOS
-    # Check if there's an explicit Training MOS column
-    mos_column = None
-    possible_columns = ['Training MOS', 'MOS', 'TrainingMOS', 'TMOS']
-    
-    for col in possible_columns:
-        if col in data.columns:
-            mos_column = col
-            break
-    
-    # If no explicit MOS column, try to infer from course titles or other data
-    if not mos_column:
-        # Create a new column for inferred MOS
-        data['InferredMOS'] = None
-        
-        # Infer MOS from personnel type and course titles
-        for i, row in data.iterrows():
-            inferred_mos = None
-            
-            # Officers are typically 18A
-            if row.get('PersonnelType') == 'Officer':
-                inferred_mos = '18A'
-            else:
-                # Try to infer from course title
-                course_title = str(row.get('Course Title', '')).upper()
-                
-                if 'WEAPONS' in course_title or 'WEAP SGT' in course_title:
-                    inferred_mos = '18B'
-                elif 'ENGINEER' in course_title or 'ENG SGT' in course_title:
-                    inferred_mos = '18C'
-                elif 'MEDICAL' in course_title or 'MED SGT' in course_title or 'MEDIC' in course_title:
-                    inferred_mos = '18D'
-                elif 'COMM' in course_title or 'SIGNAL' in course_title or 'COMMO SGT' in course_title:
-                    inferred_mos = '18E'
-            
-            data.at[i, 'InferredMOS'] = inferred_mos
-        
-        # Use the inferred MOS column
-        data['TrainingMOS'] = data['InferredMOS']
+    if 'Group Type' in data.columns:
+        data['GroupType'] = data['Group Type']
     else:
-        # Use the existing MOS column but standardize the values
-        data['TrainingMOS'] = data[mos_column]
-        
-        # Map non-standard MOS codes to standard ones
-        mos_mapping = {
-            'OFFICER': '18A',
-            'WEAPONS': '18B',
-            'ENGINEER': '18C',
-            'MEDICAL': '18D',
-            'COMMUNICATIONS': '18E'
-        }
-        
-        for i, row in data.iterrows():
-            current_mos = str(row['TrainingMOS']).upper()
-            
-            # Check if we need to map this MOS
-            for key, value in mos_mapping.items():
-                if key in current_mos:
-                    data.at[i, 'TrainingMOS'] = value
-                    break
-            
-            # If still not a standard MOS, make a best guess
-            if data.at[i, 'TrainingMOS'] not in ['18A', '18B', '18C', '18D', '18E']:
-                if row.get('PersonnelType') == 'Officer':
-                    data.at[i, 'TrainingMOS'] = '18A'
-                else:
-                    # Default to a random enlisted MOS if we can't determine
-                    data.at[i, 'TrainingMOS'] = np.random.choice(['18B', '18C', '18D', '18E'])
+        data['GroupType'] = 'Unknown'
+    
+    # Extract or infer Training MOS if available
+    process_training_mos(data)
     
     return data
+
+def process_training_mos(data):
+    """
+    Process Training MOS data, inferring it if not explicitly provided
+    
+    Args:
+        data (pd.DataFrame): Training data to process
+    """
+    # Check if Training MOS column exists
+    if 'Training MOS' in data.columns:
+        # Use existing column
+        data['TrainingMOS'] = data['Training MOS']
+    else:
+        # Try to infer from other data
+        data['TrainingMOS'] = None
+        
+        # Officers are typically 18A
+        if 'PersonnelType' in data.columns:
+            data.loc[data['PersonnelType'] == 'Officer', 'TrainingMOS'] = '18A'
+        
+        # Try to infer enlisted MOS from course titles if available
+        if 'Course Title' in data.columns:
+            # Look for keywords in course titles
+            for idx, row in data.iterrows():
+                if pd.isna(data.loc[idx, 'TrainingMOS']) and data.loc[idx, 'PersonnelType'] == 'Enlisted':
+                    course_title = str(row.get('Course Title', '')).upper()
+                    
+                    if 'WEAPONS' in course_title or 'WEAP SGT' in course_title:
+                        data.loc[idx, 'TrainingMOS'] = '18B'
+                    elif 'ENGINEER' in course_title or 'ENG SGT' in course_title:
+                        data.loc[idx, 'TrainingMOS'] = '18C'
+                    elif 'MEDICAL' in course_title or 'MED SGT' in course_title or 'MEDIC' in course_title:
+                        data.loc[idx, 'TrainingMOS'] = '18D'
+                    elif 'COMM' in course_title or 'SIGNAL' in course_title or 'COMMO SGT' in course_title:
+                        data.loc[idx, 'TrainingMOS'] = '18E'
 
 def analyze_historical_data(processed_data):
     """

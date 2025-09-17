@@ -98,10 +98,10 @@ def display_upload_page():
         | Course Title | Name of the course | SF QUAL (ORIENTATION) |
         | NAME | Student name | SMITH JOHN A |
         | SSN | Social Security Number (unique ID) | 123456789 |
+        | Arrival Date | Student arrival date (MM/DD/YYYY) | 5/24/2025 |
         | CLS | Class number | 003 |
         | Cls Start Date | Class start date (MM/DD/YYYY) | 5/27/2025 |
         | Cls End Date | Class end date (MM/DD/YYYY) | 5/30/2025 |
-        | Arrival Date | Student arrival date (MM/DD/YYYY) | 5/24/2025 |
         | Res Stat | Reservation status | R |
         | Reserve Reason | Reservation reason code | |
         | Reserve Reason Description | Detailed reservation reason | |
@@ -149,13 +149,13 @@ def display_upload_page():
         """)
         
         # Option to download a sample CSV
-        sample_data = """FY,Course Number,Course Title,NAME,SSN,CLS,Cls Start Date,Cls End Date,Arrival Date,Res Stat,Reserve Reason,Reserve Reason Description,Input Stat,Input Date,Input Reason,Input Reason Description,Out Stat,Output Date,CP Pers Type,Group Type,Training MOS
-        2025,2E-F253/011-F95,SF QUAL (ORIENTATION),SEABRIGHT NICK J,123456789,003,5/27/2025,5/30/2025,5/24/2025,R,,,I,5/27/2025,,,G,5/30/2025,E,ADE,18B
-        2025,2E-F254/011-F96,SF QUAL (SMALL UNIT TACTICS),SEABRIGHT NICK J,123456789,003,6/2/2025,7/11/2025,5/30/2025,R,,,I,6/2/2025,,,G,7/11/2025,E,ADE,18B
-        2025,3A-F38/012-F27,SERE HIGH RISK (LEVEL C),SEABRIGHT NICK J,123456789,010,7/14/2025,8/1/2025,7/11/2025,R,,,I,7/14/2025,,,G,8/1/2025,E,ADE,18B
-        2025,011-18B30-C45,SF QUAL (SF WEAPONS SERGEANT) ALC,SEABRIGHT NICK J,123456789,003,8/4/2025,10/24/2025,8/1/2025,R,,,I,8/4/2025,,,E,ADE,18B
-        2025,600-C44 (ARSOF),ARSOF BASIC LEADER,SMITH JANE A,987654321,005,4/28/2025,5/19/2025,4/25/2025,R,,,I,4/28/2025,,,G,5/19/2025,O,OF,18A
-        2024,2E-F133/011-SQIW,SF ADV RECON TGT ANALY,JOHNSON ROBERT T,456789123,001,10/10/2024,12/9/2024,10/7/2024,R,,,I,10/10/2024,,,G,12/9/2024,E,NG,18C"""
+        sample_data = """FY,Course Number,Course Title,NAME,SSN,Arrival Date,CLS,Cls Start Date,Cls End Date,Res Stat,Reserve Reason,Reserve Reason Description,Input Stat,Input Date,Input Reason,Input Reason Description,Out Stat,Output Date,CP Pers Type,Group Type,Training MOS
+        2025,2E-F253/011-F95,SF QUAL (ORIENTATION),SEABRIGHT NICK J,123456789,5/24/2025,003,5/27/2025,5/30/2025,R,,,I,5/27/2025,,,G,5/30/2025,E,ADE,18B
+        2025,2E-F254/011-F96,SF QUAL (SMALL UNIT TACTICS),SEABRIGHT NICK J,123456789,5/30/2025,003,6/2/2025,7/11/2025,R,,,I,6/2/2025,,,G,7/11/2025,E,ADE,18B
+        2025,3A-F38/012-F27,SERE HIGH RISK (LEVEL C),SEABRIGHT NICK J,123456789,7/11/2025,010,7/14/2025,8/1/2025,R,,,I,7/14/2025,,,G,8/1/2025,E,ADE,18B
+        2025,011-18B30-C45,SF QUAL (SF WEAPONS SERGEANT) ALC,SEABRIGHT NICK J,123456789,8/1/2025,003,8/4/2025,10/24/2025,R,,,I,8/4/2025,,,E,ADE,18B
+        2025,600-C44 (ARSOF),ARSOF BASIC LEADER,SMITH JANE A,987654321,4/25/2025,005,4/28/2025,5/19/2025,R,,,I,4/28/2025,,,G,5/19/2025,O,OF,18A
+        2024,2E-F133/011-SQIW,SF ADV RECON TGT ANALY,JOHNSON ROBERT T,456789123,10/7/2024,001,10/10/2024,12/9/2024,R,,,I,10/10/2024,,,G,12/9/2024,E,NG,18C"""
         
         st.download_button(
             label="Download Sample CSV",
