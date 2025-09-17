@@ -101,25 +101,50 @@ def display_upload_page():
         | CLS | Class number | 003 |
         | Cls Start Date | Class start date (MM/DD/YYYY) | 5/27/2025 |
         | Cls End Date | Class end date (MM/DD/YYYY) | 5/30/2025 |
-        | Res Stat | Reservation status | I |
+        | Res Stat | Reservation status | R |
+        | Reserve Reason | Reservation reason code | |
+        | Reserve Reason Description | Detailed reservation reason | |
         | Input Stat | Input status code | I |
         | Input Date | Input date (MM/DD/YYYY) | 5/27/2025 |
+        | Input Reason | Input reason code | |
+        | Input Reason Description | Detailed input reason | |
         | Out Stat | Output status code | G |
         | Output Date | Output date (MM/DD/YYYY) | 5/30/2025 |
         | CP Pers Type | Personnel type | E |
         | Group Type | Student group type | ADE |
         | Training MOS | Military Occupational Specialty (optional) | 18B |
         
-        **Example Data Row:**
-        ```
-        2025,2E-F253/011-F95,SF QUAL (ORIENTATION),SEABRIGHT NICK J,123456789,003,5/27/2025,5/30/2025,I,,,I,5/27/2025,,,G,5/30/2025,E,ADE,18B
-        ```
         
         **Important Status Codes:**
-        - Input Stat: I=New Input, G=Graduate, R=Reservation, C=Cancelled, N=No Show
-        - Out Stat: G=Graduate, L=Recycle, C=Cancelled
-        - CP Pers Type: O=Officer, E=Enlisted
-        - Group Type: ADE=Active Duty Enlisted, OF=Officer, NG=National Guard
+        
+        **INPUT STAT:**
+        - H = HOLD (SHOWED DID NOT START OR DID NOT GRAD)
+        - I = NEW INPUT
+        - J = RETRAINEE IN, FROM ANOTHER COURSE OF INSTRUCTION
+        - N = NO SHOW
+        - Q = RECYCLE IN, FROM ANOTHER CLASS, SAME COURSE
+        - U = SHOWED, DID NOT BEGIN TRNG (POST APPROP REASON CODE)
+        
+        **OUT STAT:**
+        - G = GRADUATE, SUCCESSFULLY COMPLETED CLASS
+        - K = RETRAINEE OUT, TO ANOTHER COURSE OF INSTRUCTION
+        - L = RECYCLE OUT, TO ANOTHER CLASS, SAME COURSE
+        - Z = NON-SUCCESSFUL COMPLETION
+        
+        **RES STAT (Reservation Status):**
+        - C = CANCELLED RESERVATION
+        - R = VALID RESERVATION
+        - M = MEP RESERVATION
+        - W = WAITING FOR RESERVATION
+        
+        **CP Pers Type:**
+        - O = Officer
+        - E = Enlisted
+        
+        **Group Type Examples:**
+        - ADE = Active Duty Enlisted
+        - OF = Officer
+        - NG = National Guard
         """)
         
         # Option to download a sample CSV

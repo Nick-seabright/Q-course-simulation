@@ -397,18 +397,20 @@ def run_simulation(inputs):
                 
                 # If failed, may need to re-take the course
                 if not passed:
-                    # Determine if student recycles or drops out
+                    # Determine if student recycles (L=Recycle Out) or fails completely (Z=Non-Successful Completion)
                     recycle_rate = historical_data.get(course, {}).get('recycle_rate', 0.5)
                     recycles = np.random.random() < recycle_rate
                     
                     if recycles:
-                        # Start waiting to retake the course
+                        # Student recycles - will be looking for the same course again
                         student.start_waiting(course, current_time)
+                        # In real system, this would be recorded with Out Stat='L'
                     else:
-                        # Student drops out
+                        # Student fails completely - won't continue with this course
                         active_students.remove(student)
                         completed_students.append(student)
                         student.graduate(current_time)
+                        # In real system, this would be recorded with Out Stat='Z'
                 
                 # If passed, check if student has completed all required courses for their MOS
                 elif has_completed_required_courses(student, course_configs):

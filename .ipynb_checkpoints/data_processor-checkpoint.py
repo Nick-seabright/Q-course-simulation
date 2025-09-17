@@ -3,6 +3,32 @@ import numpy as np
 from datetime import datetime
 from collections import defaultdict
 
+"""
+Data Processing Module Training Schedule Optimizer
+
+Status Code Reference:
+--------------------------
+INPUT STAT:
+- H = HOLD (SHOWED DID NOT START OR DID NOT GRAD)
+- I = NEW INPUT
+- J = RETRAINEE IN, FROM ANOTHER COURSE OF INSTRUCTION
+- N = NO SHOW
+- Q = RECYCLE IN, FROM ANOTHER CLASS, SAME COURSE
+- U = SHOWED, DID NOT BEGIN TRNG (POST APPROP REASON CODE)
+
+OUT STAT:
+- G = GRADUATE, SUCCESSFULLY COMPLETED CLASS
+- K = RETRAINEE OUT, TO ANOTHER COURSE OF INSTRUCTION
+- L = RECYCLE OUT, TO ANOTHER CLASS, SAME COURSE
+- Z = NON-SUCCESSFUL COMPLETION
+
+RES STAT:
+- C = CANCELLED RESERVATION
+- R = VALID RESERVATION
+- M = MEP RESERVATION
+- W = WAITING FOR RESERVATION
+"""
+
 def process_data(raw_data):
     """
     Process raw training data to extract relevant information
@@ -24,20 +50,28 @@ def process_data(raw_data):
     # Calculate class duration
     data['Duration'] = (data['Cls End Date'] - data['Cls Start Date']).dt.days
     
-    # Determine if a student started a class
+    # Determine student status based on the correct status codes
+    
+    # Determine if a student started a class (I=New Input, J=Retrainee In, Q=Recycle In)
     data['Started'] = data['Input Stat'].isin(['I', 'J', 'Q'])
     
-    # Determine if a student graduated
+    # Determine if a student graduated (G=Graduate)
     data['Graduated'] = data['Out Stat'] == 'G'
     
-    # Determine if a student recycled
+    # Determine if a student recycled (L=Recycle Out)
     data['Recycled'] = data['Out Stat'] == 'L'
     
-    # Determine if a student was a no-show
+    # Determine if a student was a no-show (N=No Show)
     data['NoShow'] = data['Input Stat'] == 'N'
     
-    # Determine if a reservation was cancelled
-    data['Cancelled'] = data['Input Stat'] == 'C'
+    # Determine if a student was retrainee out (K=Retrainee Out)
+    data['RetraineeOut'] = data['Out Stat'] == 'K'
+    
+    # Determine if a reservation was cancelled (C=Cancelled Reservation)
+    data['Cancelled'] = data['Res Stat'] == 'C'
+    
+    # Determine if a student failed or had non-successful completion (Z=Non-Successful Completion)
+    data['Failed'] = data['Out Stat'] == 'Z'
     
     # Extract personnel type (Officer vs Enlisted)
     data['PersonnelType'] = data['CP Pers Type'].map({'O': 'Officer', 'E': 'Enlisted'})
@@ -136,30 +170,36 @@ def analyze_historical_data(processed_data):
         if len(group) < 3:
             continue
             
-        # Calculate pass rate
+        # Calculate pass rate (G=Graduate)
         if group['Started'].sum() > 0:
             pass_rate = group['Graduated'].sum() / group['Started'].sum()
         else:
             pass_rate = 0
             
-        # Calculate recycle rate
+        # Calculate recycle rate (L=Recycle Out)
         if group['Started'].sum() > 0:
             recycle_rate = group['Recycled'].sum() / group['Started'].sum()
         else:
             recycle_rate = 0
             
-        # Calculate no-show rate
+        # Calculate no-show rate (N=No Show)
         reservation_count = len(group)
         if reservation_count > 0:
             no_show_rate = group['NoShow'].sum() / reservation_count
         else:
             no_show_rate = 0
             
-        # Calculate cancellation rate
+        # Calculate cancellation rate (C=Cancelled Reservation)
         if reservation_count > 0:
             cancellation_rate = group['Cancelled'].sum() / reservation_count
         else:
             cancellation_rate = 0
+            
+        # Calculate failure rate (Z=Non-Successful Completion)
+        if group['Started'].sum() > 0:
+            failure_rate = group['Failed'].sum() / group['Started'].sum()
+        else:
+            failure_rate = 0
             
         # Calculate average class size
         classes = group.groupby(['CLS', 'Cls Start Date'])
@@ -212,6 +252,7 @@ def analyze_historical_data(processed_data):
             'recycle_rate': recycle_rate,
             'no_show_rate': no_show_rate,
             'cancellation_rate': cancellation_rate,
+            'failure_rate': failure_rate,
             'avg_class_size': avg_class_size,
             'avg_duration': avg_duration,
             'classes_per_year': classes_per_year,
