@@ -789,3 +789,27 @@ def compare_schedules(original_schedule, new_schedule):
         'net_change_classes': new_metrics['total_classes'] - original_metrics['total_classes'],
         'net_change_seats': new_metrics['total_seats'] - original_metrics['total_seats']
     }
+
+def json_serializer(obj):
+    """
+    Custom JSON serializer for objects not serializable by default json code
+    
+    Args:
+        obj: Python object to serialize
+        
+    Returns:
+        JSON serializable object
+    """
+    if isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    if isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (datetime.date, datetime.datetime)):
+        return obj.isoformat()
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    
+    # For anything else that's not JSON serializable
+    return str(obj)

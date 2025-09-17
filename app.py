@@ -619,6 +619,49 @@ def display_config_page():
         st.session_state.course_configs[selected_course] = config
         st.success(f"Configuration for {selected_course} saved successfully!")
 
+    # After the "Save Configuration" button, add save/load functionality for all configurations
+    st.subheader("Save/Load All Course Configurations")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Save All Configurations"):
+            # Convert to JSON
+            config_json = json.dumps(st.session_state.course_configs, indent=2)
+            
+            # Provide download button
+            st.download_button(
+                label="Download Configurations JSON",
+                data=config_json,
+                file_name="course_configurations.json",
+                mime="application/json"
+            )
+    
+    with col2:
+        st.write("Upload previously saved configurations")
+        uploaded_configs = st.file_uploader("Upload Configurations JSON", type=["json"], key="config_uploader")
+        
+        if uploaded_configs is not None:
+            try:
+                loaded_configs = json.load(uploaded_configs)
+                
+                # Apply backward compatibility
+                for course, config in loaded_configs.items():
+                    ensure_config_compatibility(config)
+                
+                # Confirm before overwriting
+                if st.checkbox("Overwrite existing configurations?", key="overwrite_configs"):
+                    st.session_state.course_configs = loaded_configs
+                    st.success("Configurations loaded successfully!")
+                    st.rerun()
+                else:
+                    # Merge with existing configs
+                    st.session_state.course_configs.update(loaded_configs)
+                    st.success("Configurations merged successfully!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error loading configurations: {e}")
+
 def display_schedule_builder():
     st.header("Future Schedule Builder")
     
@@ -1287,6 +1330,85 @@ def display_simulation_page():
                     for month in custom_distribution:
                         custom_distribution[month] = custom_distribution[month] / total
     
+    # Save/Load Simulation Settings
+    with st.expander("Save/Load Simulation Settings"):
+        st.write("Save your current simulation settings or load previously saved settings.")
+        
+        # Current simulation settings
+        simulation_settings = {
+            'use_historical_data': use_historical_data,
+            'num_students': num_students,
+            'num_iterations': num_iterations
+        }
+        
+        # Add method-specific settings
+        if not use_historical_data or not historical_arrival_patterns:
+            simulation_settings.update({
+                'arrival_method': arrival_method,
+                'monthly_distribution': monthly_distribution,
+                'arrival_randomness': arrival_randomness
+            })
+            
+            if arrival_method == "Before each class":
+                simulation_settings['arrival_days_before'] = arrival_days_before
+            elif monthly_distribution == "Custom":
+                simulation_settings['custom_distribution'] = custom_distribution
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Save Settings"):
+                settings_json = json.dumps(simulation_settings, default=json_serializer, indent=2)
+                st.download_button(
+                    label="Download Simulation Settings",
+                    data=settings_json,
+                    file_name="simulation_settings.json",
+                    mime="application/json"
+                )
+        
+        with col2:
+            st.write("Upload previously saved settings")
+            uploaded_settings = st.file_uploader("Upload Settings JSON", type=["json"], key="settings_uploader")
+            
+            if uploaded_settings is not None:
+                try:
+                    loaded_settings = json.load(uploaded_settings)
+                    
+                    # Store in session state to use after rerun
+                    st.session_state.loaded_simulation_settings = loaded_settings
+                    
+                    st.success("Settings loaded successfully! Click 'Apply Settings' to use them.")
+                    
+                    if st.button("Apply Settings"):
+                        # We'll rerun the page and settings will be applied from session state
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error loading settings: {e}")
+    
+    # Apply loaded settings if they exist
+    if 'loaded_simulation_settings' in st.session_state:
+        loaded_settings = st.session_state.loaded_simulation_settings
+        
+        # Apply settings to UI elements
+        use_historical_data = loaded_settings.get('use_historical_data', True)
+        num_students = loaded_settings.get('num_students', 100)
+        num_iterations = loaded_settings.get('num_iterations', 10)
+        
+        if not use_historical_data:
+            arrival_method = loaded_settings.get('arrival_method', 'Before each class')
+            
+            if arrival_method == "Before each class":
+                arrival_days_before = loaded_settings.get('arrival_days_before', 3)
+            else:
+                monthly_distribution = loaded_settings.get('monthly_distribution', 'Even')
+                arrival_randomness = loaded_settings.get('arrival_randomness', 0.3)
+                
+                if monthly_distribution == "Custom":
+                    custom_distribution = loaded_settings.get('custom_distribution', {})
+        
+        # Remove from session state after applying
+        del st.session_state.loaded_simulation_settings
+    
     # Advanced settings expander
     with st.expander("Advanced Simulation Settings"):
         # MOS Distribution
@@ -1360,9 +1482,17 @@ def display_simulation_page():
     if st.button("Run Simulation"):
         with st.spinner("Running simulation..."):
             # Prepare inputs for simulation
+            course_configs_copy = copy.deepcopy(st.session_state.course_configs)
+            
+            # Apply backward compatibility to all configurations
+            for course, config in course_configs_copy.items():
+                if 'officer_enlisted_ratio' in config:
+                    if config['officer_enlisted_ratio'] == "" or not config['officer_enlisted_ratio']:
+                        config['officer_enlisted_ratio'] = None
+            
             simulation_inputs = {
                 'schedule': st.session_state.future_schedule,
-                'course_configs': st.session_state.course_configs,
+                'course_configs': course_configs_copy,
                 'historical_data': st.session_state.historical_analysis,
                 'num_students': num_students,
                 'num_iterations': num_iterations,
@@ -1408,8 +1538,63 @@ def display_simulation_page():
         with metric_cols[3]:
             st.metric("Resource Utilization", f"{results['resource_utilization']:.1%}")
         
+        # Add save/load functionality for simulation results
+        st.subheader("Save/Load Simulation Results")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Save Results"):
+                # Create a complete results package with simulation results, settings, and schedule
+                results_package = {
+                    'simulation_results': st.session_state.simulation_results,
+                    'simulation_settings': {
+                        'use_historical_data': use_historical_data,
+                        'num_students': num_students,
+                        'num_iterations': num_iterations,
+                        'randomize_factor': randomize_factor,
+                        'schedule': st.session_state.future_schedule
+                        # Include other relevant settings
+                    },
+                    'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                # Convert to JSON (handle numpy values and datetime objects)
+                results_json = json.dumps(results_package, default=json_serializer, indent=2)
+                
+                st.download_button(
+                    label="Download Simulation Results",
+                    data=results_json,
+                    file_name=f"simulation_results_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json"
+                )
+        
+        with col2:
+            st.write("Upload previously saved results")
+            uploaded_results = st.file_uploader("Upload Results JSON", type=["json"], key="results_uploader")
+            
+            if uploaded_results is not None:
+                try:
+                    loaded_package = json.load(uploaded_results)
+                    
+                    # Extract the components
+                    loaded_results = loaded_package.get('simulation_results', {})
+                    loaded_settings = loaded_package.get('simulation_settings', {})
+                    timestamp = loaded_package.get('timestamp', 'Unknown')
+                    
+                    st.session_state.loaded_simulation_results = loaded_results
+                    
+                    # Display information about the loaded results
+                    st.success(f"Results from {timestamp} loaded successfully!")
+                    
+                    if st.button("View Loaded Results"):
+                        st.session_state.simulation_results = loaded_results
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error loading results: {e}")
+        
         # Tabs for different visualizations
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Bottlenecks", "Student Flow", "Class Utilization", "MOS Analysis", "Detailed Metrics"])
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Bottlenecks", "Student Flow", "Class Utilization", "MOS Analysis", "Detailed Metrics", "Compare Simulations"])
         
         with tab1:
             st.subheader("Bottleneck Analysis")
@@ -1534,6 +1719,125 @@ def display_simulation_page():
                 file_name="simulation_results.csv",
                 mime="text/csv"
             )
+        
+        with tab6:
+            st.subheader("Compare Simulations")
+            
+            # List of simulations to compare
+            if 'comparison_simulations' not in st.session_state:
+                st.session_state.comparison_simulations = []
+            
+            # Add current simulation to comparison
+            if st.button("Add Current Simulation to Comparison"):
+                # Create a snapshot of current simulation
+                simulation_snapshot = {
+                    'results': copy.deepcopy(st.session_state.simulation_results),
+                    'name': f"Simulation {len(st.session_state.comparison_simulations) + 1}",
+                    'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                
+                st.session_state.comparison_simulations.append(simulation_snapshot)
+                st.success("Current simulation added to comparison!")
+            
+            # Upload a saved simulation for comparison
+            uploaded_comparison = st.file_uploader("Upload Simulation for Comparison", type=["json"], key="comparison_uploader")
+            if uploaded_comparison is not None:
+                try:
+                    loaded_package = json.load(uploaded_comparison)
+                    
+                    # Extract the results
+                    loaded_results = loaded_package.get('simulation_results', {})
+                    timestamp = loaded_package.get('timestamp', 'Unknown')
+                    
+                    # Create a name for the uploaded simulation
+                    simulation_name = st.text_input("Name for this simulation", 
+                                                 value=f"Uploaded Simulation {len(st.session_state.comparison_simulations) + 1}")
+                    
+                    if st.button("Add to Comparison"):
+                        simulation_snapshot = {
+                            'results': loaded_results,
+                            'name': simulation_name,
+                            'timestamp': timestamp
+                        }
+                        
+                        st.session_state.comparison_simulations.append(simulation_snapshot)
+                        st.success(f"Uploaded simulation '{simulation_name}' added to comparison!")
+                except Exception as e:
+                    st.error(f"Error loading simulation for comparison: {e}")
+            
+            # Display comparison if we have simulations to compare
+            if st.session_state.comparison_simulations:
+                st.write("### Simulations for Comparison")
+                
+                # Create comparison table
+                comparison_data = []
+                for sim in st.session_state.comparison_simulations:
+                    results = sim['results']
+                    comparison_data.append({
+                        'Simulation': sim['name'],
+                        'Timestamp': sim['timestamp'],
+                        'Avg Completion Time': f"{results.get('avg_completion_time', 0):.1f} days",
+                        'Avg Wait Time': f"{results.get('avg_wait_time', 0):.1f} days",
+                        'Throughput': f"{results.get('throughput', 0):.1f}/month",
+                        'Resource Utilization': f"{results.get('resource_utilization', 0):.1%}"
+                    })
+                
+                # Display comparison table
+                st.dataframe(pd.DataFrame(comparison_data))
+                
+                # Create comparison charts
+                metrics_to_compare = ["Avg Completion Time", "Avg Wait Time", "Throughput", "Resource Utilization"]
+                metric_to_viz = st.selectbox("Select metric to visualize", metrics_to_compare)
+                
+                # Create visualization based on selected metric
+                if metric_to_viz == "Avg Completion Time":
+                    data = [{'Simulation': sim['name'], 'Value': sim['results'].get('avg_completion_time', 0)} 
+                           for sim in st.session_state.comparison_simulations]
+                    
+                    fig = px.bar(
+                        data, x='Simulation', y='Value',
+                        title="Average Completion Time Comparison (days)",
+                        labels={'Value': 'Days'}
+                    )
+                    
+                elif metric_to_viz == "Avg Wait Time":
+                    data = [{'Simulation': sim['name'], 'Value': sim['results'].get('avg_wait_time', 0)} 
+                           for sim in st.session_state.comparison_simulations]
+                    
+                    fig = px.bar(
+                        data, x='Simulation', y='Value',
+                        title="Average Wait Time Comparison (days)",
+                        labels={'Value': 'Days'}
+                    )
+                    
+                elif metric_to_viz == "Throughput":
+                    data = [{'Simulation': sim['name'], 'Value': sim['results'].get('throughput', 0)} 
+                           for sim in st.session_state.comparison_simulations]
+                    
+                    fig = px.bar(
+                        data, x='Simulation', y='Value',
+                        title="Throughput Comparison (students/month)",
+                        labels={'Value': 'Students/Month'}
+                    )
+                    
+                else:  # Resource Utilization
+                    data = [{'Simulation': sim['name'], 'Value': sim['results'].get('resource_utilization', 0)} 
+                           for sim in st.session_state.comparison_simulations]
+                    
+                    fig = px.bar(
+                        data, x='Simulation', y='Value',
+                        title="Resource Utilization Comparison",
+                        labels={'Value': 'Utilization'},
+                        range_y=[0, 1]
+                    )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Option to clear comparison data
+                if st.button("Clear Comparison Data"):
+                    st.session_state.comparison_simulations = []
+                    st.success("Comparison data cleared!")
+                    st.rerun()
         
         # If using historical data, show comparison between historical and simulated patterns
         if use_historical_data and historical_arrival_patterns:
