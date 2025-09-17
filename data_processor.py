@@ -50,19 +50,48 @@ def process_data(raw_data):
         date_columns.append('Arrival Date')
     
     for col in date_columns:
-        data[col] = pd.to_datetime(data[col], errors='coerce')
+        if col in data.columns:
+            data[col] = pd.to_datetime(data[col], errors='coerce')
     
-    # If Arrival Date doesn't exist, estimate it based on Input Date
+    # Group by student (SSN) to identify each student's first class
+    student_groups = data.groupby('SSN')
+    
+    # If Arrival Date doesn't exist or has missing values, add/update it
     if 'Arrival Date' not in data.columns:
-        # Estimate arrival as 3 days before class start by default
-        data['Arrival Date'] = data['Cls Start Date'] - pd.Timedelta(days=3)
-        st.warning("Arrival Date column not found. Estimating arrival as 3 days before class start.")
+        # Create the column
+        data['Arrival Date'] = pd.NaT
+        st.warning("Arrival Date column not found. Estimating arrival as 3 weeks before each student's first class.")
+    
+    # Process each student
+    for ssn, student_data in student_groups:
+        # Sort by class start date to find first class
+        sorted_classes = student_data.sort_values('Cls Start Date')
+        
+        if len(sorted_classes) > 0:
+            first_class_start = sorted_classes.iloc[0]['Cls Start Date']
+            
+            # Check each row for this student
+            for idx in sorted_classes.index:
+                # If arrival date is missing or invalid (after class start)
+                if pd.isna(data.loc[idx, 'Arrival Date']) or data.loc[idx, 'Arrival Date'] > data.loc[idx, 'Cls Start Date']:
+                    # Set arrival date to 3 weeks (21 days) before first class
+                    data.loc[idx, 'Arrival Date'] = first_class_start - pd.Timedelta(days=21)
+    
+    # Perform a final check to ensure all arrival dates are before class start dates
+    # and flag any issues
+    invalid_arrivals = data[data['Arrival Date'] > data['Cls Start Date']]
+    if len(invalid_arrivals) > 0:
+        st.warning(f"Found {len(invalid_arrivals)} records with arrival dates after class start dates. These have been corrected.")
+        # Fix any remaining invalid arrival dates
+        data.loc[invalid_arrivals.index, 'Arrival Date'] = data.loc[invalid_arrivals.index, 'Cls Start Date'] - pd.Timedelta(days=1)
     
     # Calculate days between arrival and class start
     data['Days Before Class'] = (data['Cls Start Date'] - data['Arrival Date']).dt.days
     
     # Calculate class duration
     data['Duration'] = (data['Cls End Date'] - data['Cls Start Date']).dt.days
+    
+    # Determine student status based on the correct status codes
     
     # Determine if a student started a class (I=New Input, J=Retrainee In, Q=Recycle In)
     data['Started'] = data['Input Stat'].isin(['I', 'J', 'Q'])
