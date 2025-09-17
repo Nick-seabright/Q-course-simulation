@@ -79,7 +79,7 @@ def main():
     if st.sidebar.button("Reset Application"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        st.experimental_rerun()
+        st.rerun()
 
 def display_upload_page():
     st.header("Upload Training Data")
@@ -670,25 +670,25 @@ def display_schedule_builder():
             if st.button("1 Week"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=7)
-                st.experimental_rerun()
+                st.rerun()
         
         with col2:
             if st.button("2 Weeks"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=14)
-                st.experimental_rerun()
+                st.rerun()
         
         with col3:
             if st.button("1 Month"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=30)
-                st.experimental_rerun()
+                st.rerun()
         
         with col4:
             if st.button(f"Historical ({default_duration} days)"):
                 st.session_state.temp_start = start_date
                 st.session_state.temp_end = start_date + datetime.timedelta(days=default_duration)
-                st.experimental_rerun()
+                st.rerun()
     
     # Date and size inputs
     col1, col2, col3 = st.columns(3)
@@ -965,7 +965,7 @@ def display_schedule_builder():
         if st.button("Remove Class"):
             st.session_state.future_schedule = [c for c in st.session_state.future_schedule if c['id'] != class_to_remove]
             st.success(f"Removed class with ID {class_to_remove}")
-            st.experimental_rerun()
+            st.rerun()
     else:
         st.info("No classes scheduled yet. Add classes using the form above.")
     
@@ -1136,7 +1136,7 @@ def display_schedule_builder():
                     st.session_state.future_schedule = loaded_data
                 
                 st.success("Schedule loaded successfully!")
-                st.experimental_rerun()
+                st.rerun()
             except Exception as e:
                 st.error(f"Error loading schedule: {e}")
 
