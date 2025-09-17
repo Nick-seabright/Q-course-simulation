@@ -55,8 +55,8 @@ This application helps military training planners create, simulate, and optimize
 
 1. Clone this repository:
    ```
-   git clone https://github.com/yourusername/military-training-scheduler.git
-   cd military-training-scheduler
+   git clone https://github.com/Nick-seabright/Q-course-simulation.git
+   cd Q-course-simulation
    ```
 
 2. Install required packages:

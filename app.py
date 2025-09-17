@@ -84,6 +84,60 @@ def main():
 def display_upload_page():
     st.header("Upload Training Data")
     
+    # Add format information and example before upload
+    with st.expander("Data Format Requirements", expanded=True):
+        st.markdown("""
+        ### Required Data Format
+        
+        Your CSV file should include the following columns:
+        
+        | Column Name | Description | Example |
+        |-------------|-------------|---------|
+        | FY | Fiscal Year | 2025 |
+        | Course Number | Course identifier | 2E-F253/011-F95 |
+        | Course Title | Name of the course | SF QUAL (ORIENTATION) |
+        | NAME | Student name | SMITH JOHN A |
+        | SSN | Social Security Number (unique ID) | 123456789 |
+        | CLS | Class number | 003 |
+        | Cls Start Date | Class start date (MM/DD/YYYY) | 5/27/2025 |
+        | Cls End Date | Class end date (MM/DD/YYYY) | 5/30/2025 |
+        | Res Stat | Reservation status | I |
+        | Input Stat | Input status code | I |
+        | Input Date | Input date (MM/DD/YYYY) | 5/27/2025 |
+        | Out Stat | Output status code | G |
+        | Output Date | Output date (MM/DD/YYYY) | 5/30/2025 |
+        | CP Pers Type | Personnel type | E |
+        | Group Type | Student group type | ADE |
+        | Training MOS | Military Occupational Specialty (optional) | 18B |
+        
+        **Example Data Row:**
+        ```
+        2025,2E-F253/011-F95,SF QUAL (ORIENTATION),SEABRIGHT NICK J,123456789,003,5/27/2025,5/30/2025,I,,,I,5/27/2025,,,G,5/30/2025,E,ADE,18B
+        ```
+        
+        **Important Status Codes:**
+        - Input Stat: I=New Input, G=Graduate, R=Reservation, C=Cancelled, N=No Show
+        - Out Stat: G=Graduate, L=Recycle, C=Cancelled
+        - CP Pers Type: O=Officer, E=Enlisted
+        - Group Type: ADE=Active Duty Enlisted, OF=Officer, NG=National Guard
+        """)
+        
+        # Option to download a sample CSV
+        sample_data = """FY,Course Number,Course Title,NAME,SSN,CLS,Cls Start Date,Cls End Date,Res Stat,Reserve Reason,Reserve Reason Description,Input Stat,Input Date,Input Reason,Input Reason Description,Out Stat,Output Date,CP Pers Type,Group Type,Training MOS
+2025,2E-F253/011-F95,SF QUAL (ORIENTATION),SEABRIGHT NICK J,123456789,003,5/27/2025,5/30/2025,I,,,I,5/27/2025,,,G,5/30/2025,E,ADE,18B
+2025,2E-F254/011-F96,SF QUAL (SMALL UNIT TACTICS),SEABRIGHT NICK J,123456789,003,6/2/2025,7/11/2025,I,,,I,6/2/2025,,,G,7/11/2025,E,ADE,18B
+2025,3A-F38/012-F27,SERE HIGH RISK (LEVEL C),SEABRIGHT NICK J,123456789,010,7/14/2025,8/1/2025,R,,,I,7/14/2025,,,G,8/1/2025,E,ADE,18B
+2025,011-18B30-C45,SF QUAL (SF WEAPONS SERGEANT) ALC,SEABRIGHT NICK J,123456789,003,8/4/2025,10/24/2025,I,,,I,8/4/2025,,,E,ADE,18B
+2025,600-C44 (ARSOF),ARSOF BASIC LEADER,SMITH JANE A,987654321,005,4/28/2025,5/19/2025,R,,,I,4/28/2025,,,G,5/19/2025,O,OF,18A
+2024,2E-F133/011-SQIW,SF ADV RECON TGT ANALY,JOHNSON ROBERT T,456789123,001,10/10/2024,12/9/2024,R,,,I,10/10/2024,,,G,12/9/2024,E,NG,18C"""
+        
+        st.download_button(
+            label="Download Sample CSV",
+            data=sample_data,
+            file_name="sample_training_data.csv",
+            mime="text/csv"
+        )
+    
     uploaded_file = st.file_uploader("Upload training data CSV", type=["csv"])
     
     if uploaded_file is not None:
@@ -942,6 +996,61 @@ def display_schedule_builder():
     
     # Save/load schedule
     st.subheader("Save/Load Schedule")
+    
+    with st.expander("Schedule File Format Information"):
+        st.markdown("""
+        ### Schedule File Format
+        
+        The schedule is saved as a JSON file with the following structure:
+        
+        ```json
+        {
+          "schedule": [
+            {
+              "course_title": "SF QUAL (ORIENTATION)",
+              "start_date": "2025-05-27",
+              "end_date": "2025-05-30",
+              "size": 200,
+              "id": 1,
+              "mos_allocation": {
+                "18A": 40,
+                "18B": 40,
+                "18C": 40,
+                "18D": 40,
+                "18E": 40
+              }
+            }
+          ],
+          "configurations": {
+            "SF QUAL (ORIENTATION)": {
+              "prerequisites": {
+                "type": "AND",
+                "courses": []
+              },
+              "or_prerequisites": [],
+              "mos_paths": {
+                "18A": [],
+                "18B": [],
+                "18C": [],
+                "18D": [],
+                "18E": []
+              },
+              "required_for_all_mos": true,
+              "max_capacity": 200,
+              "classes_per_year": 12,
+              "reserved_seats": {
+                "OF": 40,
+                "ADE": 140,
+                "NG": 20
+              },
+              "officer_enlisted_ratio": "1:4"
+            }
+          }
+        }
+        ```
+        
+        When uploading a schedule, the file must follow this format or be a simplified version with just the schedule array.
+        """)
     
     col1, col2 = st.columns(2)
     
