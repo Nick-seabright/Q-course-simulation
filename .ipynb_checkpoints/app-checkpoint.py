@@ -18,7 +18,7 @@ def main():
     st.title("Training Schedule Optimization System")
     # Sidebar navigation
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Upload Data", "Course Configuration", "Schedule Builder",
+    page = st.sidebar.radio("Go to", ["Upload Data", "Career Path Builder", "Course Configuration", "Schedule Builder",
                                       "Simulation", "Optimization"])
     # Initialize session state for data persistence between pages
     if 'data' not in st.session_state:
@@ -53,9 +53,6 @@ def main():
                     '18E': []
                 }
                 config['required_for_all_mos'] = False
-            # Add even MOS ratio setting if it doesn't exist
-            if 'use_even_mos_ratio' not in config:
-                config['use_even_mos_ratio'] = False
                 
     if 'future_schedule' not in st.session_state:
         st.session_state.future_schedule = []
@@ -64,6 +61,8 @@ def main():
 
     if page == "Upload Data":
         display_upload_page()
+    elif page == "Career Path Builder":
+        display_career_path_builder()
     elif page == "Course Configuration":
         display_config_page()
     elif page == "Schedule Builder":
@@ -359,6 +358,341 @@ def visualize_prerequisites(course_configs):
             x=0.5, y=0.5, showarrow=False
         )
         return fig
+
+def display_career_path_builder():
+    st.header("Career Path Builder")
+    st.write("Build and edit career paths for each MOS to automatically set prerequisites.")
+
+    # Initialize custom paths in session state if not present
+    if 'custom_paths' not in st.session_state:
+        st.session_state.custom_paths = {
+            '18A': {'path': [], 'flexible_courses': []},
+            '18B': {'path': [], 'flexible_courses': []},
+            '18C': {'path': [], 'flexible_courses': []},
+            '18D': {'path': [], 'flexible_courses': []},
+            '18E': {'path': [], 'flexible_courses': []}
+        }
+
+    # Add General path option
+    if 'General' not in st.session_state.custom_paths:
+        st.session_state.custom_paths['General'] = {'path': [], 'flexible_courses': []}
+
+    # Create tabs for each MOS and General path
+    path_tabs = st.tabs(['General', '18A (Officer)', '18B (Weapons)', '18C (Engineer)', '18D (Medical)', '18E (Communications)'])
+
+    # Get all available courses
+    if 'course_configs' in st.session_state:
+        all_courses = list(st.session_state.course_configs.keys())
+    else:
+        # If course configs aren't available yet, use courses from processed data if available
+        if 'processed_data' in st.session_state and st.session_state.processed_data is not None:
+            all_courses = list(st.session_state.processed_data['Course Title'].unique())
+        else:
+            all_courses = []
+    all_courses.sort()
+
+    if not all_courses:
+        st.warning("No courses available. Please upload data or configure courses first.")
+        return
+
+    # Process each tab
+    for i, mos in enumerate(['General', '18A', '18B', '18C', '18D', '18E']):
+        with path_tabs[i]:
+            st.write(f"### {mos} Career Path")
+            
+            # Get the current path
+            path_data = st.session_state.custom_paths[mos]
+            current_path = path_data.get('path', [])
+            flexible_courses = path_data.get('flexible_courses', [])
+            
+            # Build Career Path
+            st.write("### Build Career Path")
+            st.write("Add courses in sequence to create a career path. Courses will automatically get prerequisites based on their order.")
+            
+            # Add course to path
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                new_course = st.selectbox(
+                    "Add Course to Path",
+                    options=[""] + [c for c in all_courses if c not in current_path and c not in flexible_courses],
+                    key=f"add_course_{mos}"
+                )
+            with col2:
+                if st.button("Add", key=f"add_button_{mos}") and new_course:
+                    current_path.append(new_course)
+                    st.session_state.custom_paths[mos]['path'] = current_path
+                    st.success(f"Added {new_course} to path")
+                    st.rerun()
+            
+            # Display and edit the current path
+            if current_path:
+                # Create a table for reordering
+                path_items = []
+                for j, course in enumerate(current_path):
+                    path_items.append({
+                        "id": j,
+                        "course": course
+                    })
+                
+                # Use a dataframe with drag-and-drop capability
+                edited_df = pd.DataFrame(path_items)
+                
+                st.write("Drag rows to reorder the career path:")
+                edited_path = st.data_editor(
+                    edited_df,
+                    column_config={
+                        "id": st.column_config.NumberColumn(
+                            "Position",
+                            help="Drag rows to reorder",
+                            width="small",
+                        ),
+                        "course": st.column_config.TextColumn(
+                            "Course",
+                            width="large",
+                        )
+                    },
+                    hide_index=True,
+                    key=f"path_editor_{mos}",
+                    use_container_width=True,
+                    num_rows="fixed"
+                )
+                
+                # Update the path based on the edited dataframe
+                if len(edited_path) > 0:
+                    # Get the courses in order
+                    ordered_courses = edited_path.sort_values('id')['course'].tolist()
+                    # Update the path
+                    st.session_state.custom_paths[mos]['path'] = ordered_courses
+                    current_path = ordered_courses
+                
+                # Option to remove courses
+                course_to_remove = st.selectbox(
+                    "Remove Course from Path",
+                    options=[""] + current_path,
+                    key=f"remove_course_{mos}"
+                )
+                
+                if st.button("Remove", key=f"remove_button_{mos}") and course_to_remove:
+                    current_path.remove(course_to_remove)
+                    st.session_state.custom_paths[mos]['path'] = current_path
+                    st.success(f"Removed {course_to_remove} from path")
+                    st.rerun()
+            else:
+                st.info("No courses in path yet. Add courses using the dropdown above.")
+            
+            # Flexible Courses Section
+            st.write("### Flexible Courses")
+            st.write("These courses are part of the career path but don't have specific prerequisites or ordering requirements.")
+            
+            # Add flexible course
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                new_flexible = st.selectbox(
+                    "Add Flexible Course",
+                    options=[""] + [c for c in all_courses if c not in current_path and c not in flexible_courses],
+                    key=f"add_flexible_{mos}"
+                )
+            with col2:
+                if st.button("Add", key=f"add_flexible_button_{mos}") and new_flexible:
+                    flexible_courses.append(new_flexible)
+                    st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
+                    st.success(f"Added {new_flexible} as flexible course")
+                    st.rerun()
+            
+            # Display flexible courses
+            if flexible_courses:
+                st.write("Current flexible courses:")
+                flexible_df = pd.DataFrame({
+                    "course": flexible_courses
+                })
+                
+                st.dataframe(flexible_df, hide_index=True, use_container_width=True)
+                
+                # Remove flexible course
+                flexible_to_remove = st.selectbox(
+                    "Remove Flexible Course",
+                    options=[""] + flexible_courses,
+                    key=f"remove_flexible_{mos}"
+                )
+                
+                if st.button("Remove", key=f"remove_flexible_button_{mos}") and flexible_to_remove:
+                    flexible_courses.remove(flexible_to_remove)
+                    st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
+                    st.success(f"Removed {flexible_to_remove} from flexible courses")
+                    st.rerun()
+            else:
+                st.info("No flexible courses defined yet.")
+            
+            # Move between path and flexible
+            if current_path and flexible_courses:
+                st.write("### Move Courses")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Move from path to flexible
+                    path_to_flexible = st.selectbox(
+                        "Move from Path to Flexible",
+                        options=[""] + current_path,
+                        key=f"path_to_flexible_{mos}"
+                    )
+                    
+                    if st.button("Move to Flexible", key=f"path_to_flexible_button_{mos}") and path_to_flexible:
+                        current_path.remove(path_to_flexible)
+                        flexible_courses.append(path_to_flexible)
+                        st.session_state.custom_paths[mos]['path'] = current_path
+                        st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
+                        st.success(f"Moved {path_to_flexible} to flexible courses")
+                        st.rerun()
+                
+                with col2:
+                    # Move from flexible to path
+                    flexible_to_path = st.selectbox(
+                        "Move from Flexible to Path",
+                        options=[""] + flexible_courses,
+                        key=f"flexible_to_path_{mos}"
+                    )
+                    
+                    if st.button("Move to Path", key=f"flexible_to_path_button_{mos}") and flexible_to_path:
+                        flexible_courses.remove(flexible_to_path)
+                        current_path.append(flexible_to_path)
+                        st.session_state.custom_paths[mos]['path'] = current_path
+                        st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
+                        st.success(f"Moved {flexible_to_path} to path")
+                        st.rerun()
+            
+            # Show the current path visualization
+            if current_path:
+                st.write("### Career Path Visualization")
+                path_str = " → ".join(current_path)
+                st.write(path_str)
+                
+                # Create a visual representation of the path
+                try:
+                    fig = go.Figure()
+                    
+                    # Plot nodes for each course in the path
+                    for j, course in enumerate(current_path):
+                        fig.add_trace(go.Scatter(
+                            x=[j],
+                            y=[0],
+                            mode='markers+text',
+                            text=[course],
+                            textposition='top center',
+                            marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
+                            name=course
+                        ))
+                        
+                        # Add arrow to the next course
+                        if j < len(current_path) - 1:
+                            fig.add_annotation(
+                                x=j+0.5,
+                                y=0,
+                                ax=j,
+                                ay=0,
+                                xref='x',
+                                yref='y',
+                                axref='x',
+                                ayref='y',
+                                showarrow=True,
+                                arrowhead=2,
+                                arrowsize=1,
+                                arrowwidth=2,
+                                arrowcolor='rgba(66, 133, 244, 0.8)'
+                            )
+                    
+                    # Add flexible courses as separate nodes
+                    if flexible_courses:
+                        for j, course in enumerate(flexible_courses):
+                            fig.add_trace(go.Scatter(
+                                x=[j],
+                                y=[1],  # Position above the main path
+                                mode='markers+text',
+                                text=[course],
+                                textposition='top center',
+                                marker=dict(size=15, color='rgba(76, 175, 80, 0.8)', symbol='diamond'),
+                                name=course
+                            ))
+                    
+                    # Update layout
+                    fig.update_layout(
+                        showlegend=False,
+                        xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
+                        yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
+                        margin=dict(l=20, r=20, t=20, b=20),
+                        height=300 if flexible_courses else 200,
+                        width=max(600, len(current_path) * 100)
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Error creating visualization: {e}")
+
+    # Apply paths to configurations button
+    st.subheader("Apply Career Paths to Configurations")
+    st.write("This will update course prerequisites based on your custom career paths.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        clear_existing = st.checkbox("Clear existing prerequisites", value=True, 
+                                   help="If checked, existing prerequisites will be cleared before applying the career paths.")
+
+    with col2:
+        update_mos_paths = st.checkbox("Update MOS paths", value=True,
+                                     help="If checked, each course will be marked as part of the appropriate MOS path.")
+
+    if st.button("Apply Career Paths to Prerequisites"):
+        if 'course_configs' not in st.session_state or not st.session_state.course_configs:
+            st.error("No course configurations found. Please go to the Course Configuration page first.")
+        else:
+            # Apply career paths to configurations
+            updated_configs, changes = apply_custom_paths_to_configs(
+                st.session_state.course_configs,
+                st.session_state.custom_paths
+            )
+            
+            if changes:
+                st.session_state.career_path_changes = changes
+                st.success(f"Made {len(changes)} updates to course configurations based on career paths!")
+                
+                # Show summary of changes
+                with st.expander("View Changes", expanded=True):
+                    # Count changes by type
+                    change_counts = defaultdict(int)
+                    for change in changes:
+                        change_counts[change['action']] += 1
+                    
+                    # Display counts
+                    st.write("### Changes Summary")
+                    for action, count in change_counts.items():
+                        if action == 'set_prerequisites':
+                            st.write(f"• Set prerequisites for {count} courses")
+                        elif action == 'added_to_mos_path':
+                            st.write(f"• Added {count} courses to MOS paths")
+                        elif action == 'added_as_flexible_course':
+                            st.write(f"• Added {count} flexible courses to MOS paths")
+                    
+                    # Option to see all changes
+                    if st.checkbox("Show all changes"):
+                        for change in changes:
+                            course = change['course']
+                            mos = change['mos']
+                            action = change['action']
+                            
+                            if action == 'set_prerequisites':
+                                prereqs = change['prerequisites']
+                                st.write(f"• Set prerequisites for {course} ({mos}): {', '.join(prereqs)}")
+                            elif action == 'added_to_mos_path':
+                                st.write(f"• Added {course} to {mos} career path")
+                            elif action == 'added_as_flexible_course':
+                                st.write(f"• Added {course} as a flexible course for {mos}")
+                
+                # Option to apply changes
+                if st.button("Confirm and Update Configurations"):
+                    st.session_state.course_configs = updated_configs
+                    st.success("Course configurations updated successfully!")
+                    st.rerun()
+            else:
+                st.info("No changes needed. Course configurations already match the career paths.")
 
 def display_config_page():
     st.header("Course Configuration")
@@ -751,327 +1085,6 @@ def display_config_page():
             st.metric("Avg. Duration", f"{hist_data.get('avg_duration', 0):.1f} days")
         with metrics_col3:
             st.metric("Recycle Rate", f"{hist_data.get('recycle_rate', 0):.1%}")
-
-    # Add this section to the display_config_page function
-    st.subheader("Career Path Builder")
-    st.write("Build and edit career paths for each MOS to automatically set prerequisites.")
-    
-    # Initialize custom paths in session state if not present
-    if 'custom_paths' not in st.session_state:
-        st.session_state.custom_paths = {
-            '18A': {'path': [], 'flexible_courses': []},
-            '18B': {'path': [], 'flexible_courses': []},
-            '18C': {'path': [], 'flexible_courses': []},
-            '18D': {'path': [], 'flexible_courses': []},
-            '18E': {'path': [], 'flexible_courses': []}
-        }
-    
-    # Add General path option
-    if 'General' not in st.session_state.custom_paths:
-        st.session_state.custom_paths['General'] = {'path': [], 'flexible_courses': []}
-    
-    # Create tabs for each MOS and General path
-    path_tabs = st.tabs(['General', '18A (Officer)', '18B (Weapons)', '18C (Engineer)', '18D (Medical)', '18E (Communications)'])
-    
-    # Get all available courses
-    all_courses = list(st.session_state.course_configs.keys())
-    all_courses.sort()
-    
-    # Process each tab
-    for i, mos in enumerate(['General', '18A', '18B', '18C', '18D', '18E']):
-        with path_tabs[i]:
-            st.write(f"### {mos} Career Path")
-            
-            # Get the current path
-            path_data = st.session_state.custom_paths[mos]
-            current_path = path_data.get('path', [])
-            flexible_courses = path_data.get('flexible_courses', [])
-            
-            # Build Career Path
-            st.write("### Build Career Path")
-            st.write("Add courses in sequence to create a career path. Courses will automatically get prerequisites based on their order.")
-            
-            # Add course to path
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                new_course = st.selectbox(
-                    "Add Course to Path",
-                    options=[""] + [c for c in all_courses if c not in current_path and c not in flexible_courses],
-                    key=f"add_course_{mos}"
-                )
-            with col2:
-                if st.button("Add", key=f"add_button_{mos}") and new_course:
-                    current_path.append(new_course)
-                    st.session_state.custom_paths[mos]['path'] = current_path
-                    st.success(f"Added {new_course} to path")
-                    st.rerun()
-            
-            # Display and edit the current path
-            if current_path:
-                # Create a table for reordering
-                path_items = []
-                for j, course in enumerate(current_path):
-                    path_items.append({
-                        "id": j,
-                        "course": course
-                    })
-                
-                # Use a dataframe with drag-and-drop capability
-                edited_df = pd.DataFrame(path_items)
-                
-                st.write("Drag rows to reorder the career path:")
-                edited_path = st.data_editor(
-                    edited_df,
-                    column_config={
-                        "id": st.column_config.NumberColumn(
-                            "Position",
-                            help="Drag rows to reorder",
-                            width="small",
-                        ),
-                        "course": st.column_config.TextColumn(
-                            "Course",
-                            width="large",
-                        )
-                    },
-                    hide_index=True,
-                    key=f"path_editor_{mos}",
-                    use_container_width=True,
-                    num_rows="fixed"
-                )
-                
-                # Update the path based on the edited dataframe
-                if len(edited_path) > 0:
-                    # Get the courses in order
-                    ordered_courses = edited_path.sort_values('id')['course'].tolist()
-                    # Update the path
-                    st.session_state.custom_paths[mos]['path'] = ordered_courses
-                    current_path = ordered_courses
-                
-                # Option to remove courses
-                course_to_remove = st.selectbox(
-                    "Remove Course from Path",
-                    options=[""] + current_path,
-                    key=f"remove_course_{mos}"
-                )
-                
-                if st.button("Remove", key=f"remove_button_{mos}") and course_to_remove:
-                    current_path.remove(course_to_remove)
-                    st.session_state.custom_paths[mos]['path'] = current_path
-                    st.success(f"Removed {course_to_remove} from path")
-                    st.rerun()
-            else:
-                st.info("No courses in path yet. Add courses using the dropdown above.")
-            
-            # Flexible Courses Section
-            st.write("### Flexible Courses")
-            st.write("These courses are part of the career path but don't have specific prerequisites or ordering requirements.")
-            
-            # Add flexible course
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                new_flexible = st.selectbox(
-                    "Add Flexible Course",
-                    options=[""] + [c for c in all_courses if c not in current_path and c not in flexible_courses],
-                    key=f"add_flexible_{mos}"
-                )
-            with col2:
-                if st.button("Add", key=f"add_flexible_button_{mos}") and new_flexible:
-                    flexible_courses.append(new_flexible)
-                    st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
-                    st.success(f"Added {new_flexible} as flexible course")
-                    st.rerun()
-            
-            # Display flexible courses
-            if flexible_courses:
-                st.write("Current flexible courses:")
-                flexible_df = pd.DataFrame({
-                    "course": flexible_courses
-                })
-                
-                st.dataframe(flexible_df, hide_index=True, use_container_width=True)
-                
-                # Remove flexible course
-                flexible_to_remove = st.selectbox(
-                    "Remove Flexible Course",
-                    options=[""] + flexible_courses,
-                    key=f"remove_flexible_{mos}"
-                )
-                
-                if st.button("Remove", key=f"remove_flexible_button_{mos}") and flexible_to_remove:
-                    flexible_courses.remove(flexible_to_remove)
-                    st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
-                    st.success(f"Removed {flexible_to_remove} from flexible courses")
-                    st.rerun()
-            else:
-                st.info("No flexible courses defined yet.")
-            
-            # Move between path and flexible
-            if current_path and flexible_courses:
-                st.write("### Move Courses")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Move from path to flexible
-                    path_to_flexible = st.selectbox(
-                        "Move from Path to Flexible",
-                        options=[""] + current_path,
-                        key=f"path_to_flexible_{mos}"
-                    )
-                    
-                    if st.button("Move to Flexible", key=f"path_to_flexible_button_{mos}") and path_to_flexible:
-                        current_path.remove(path_to_flexible)
-                        flexible_courses.append(path_to_flexible)
-                        st.session_state.custom_paths[mos]['path'] = current_path
-                        st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
-                        st.success(f"Moved {path_to_flexible} to flexible courses")
-                        st.rerun()
-                
-                with col2:
-                    # Move from flexible to path
-                    flexible_to_path = st.selectbox(
-                        "Move from Flexible to Path",
-                        options=[""] + flexible_courses,
-                        key=f"flexible_to_path_{mos}"
-                    )
-                    
-                    if st.button("Move to Path", key=f"flexible_to_path_button_{mos}") and flexible_to_path:
-                        flexible_courses.remove(flexible_to_path)
-                        current_path.append(flexible_to_path)
-                        st.session_state.custom_paths[mos]['path'] = current_path
-                        st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
-                        st.success(f"Moved {flexible_to_path} to path")
-                        st.rerun()
-            
-            # Show the current path visualization
-            if current_path:
-                st.write("### Career Path Visualization")
-                path_str = " → ".join(current_path)
-                st.write(path_str)
-                
-                # Create a visual representation of the path
-                try:
-                    fig = go.Figure()
-                    
-                    # Plot nodes for each course in the path
-                    for j, course in enumerate(current_path):
-                        fig.add_trace(go.Scatter(
-                            x=[j],
-                            y=[0],
-                            mode='markers+text',
-                            text=[course],
-                            textposition='top center',
-                            marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
-                            name=course
-                        ))
-                        
-                        # Add arrow to the next course
-                        if j < len(current_path) - 1:
-                            fig.add_annotation(
-                                x=j+0.5,
-                                y=0,
-                                ax=j,
-                                ay=0,
-                                xref='x',
-                                yref='y',
-                                axref='x',
-                                ayref='y',
-                                showarrow=True,
-                                arrowhead=2,
-                                arrowsize=1,
-                                arrowwidth=2,
-                                arrowcolor='rgba(66, 133, 244, 0.8)'
-                            )
-                    
-                    # Add flexible courses as separate nodes
-                    if flexible_courses:
-                        for j, course in enumerate(flexible_courses):
-                            fig.add_trace(go.Scatter(
-                                x=[j],
-                                y=[1],  # Position above the main path
-                                mode='markers+text',
-                                text=[course],
-                                textposition='top center',
-                                marker=dict(size=15, color='rgba(76, 175, 80, 0.8)', symbol='diamond'),
-                                name=course
-                            ))
-                    
-                    # Update layout
-                    fig.update_layout(
-                        showlegend=False,
-                        xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
-                        yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
-                        margin=dict(l=20, r=20, t=20, b=20),
-                        height=300 if flexible_courses else 200,
-                        width=max(600, len(current_path) * 100)
-                    )
-                    
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Error creating visualization: {e}")
-    
-    # Apply paths to configurations button
-    st.subheader("Apply Career Paths to Configurations")
-    st.write("This will update course prerequisites based on your custom career paths.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        clear_existing = st.checkbox("Clear existing prerequisites", value=True, 
-                                   help="If checked, existing prerequisites will be cleared before applying the career paths.")
-    
-    with col2:
-        update_mos_paths = st.checkbox("Update MOS paths", value=True,
-                                     help="If checked, each course will be marked as part of the appropriate MOS path.")
-    
-    if st.button("Apply Career Paths to Prerequisites"):
-        # Apply career paths to configurations
-        updated_configs, changes = apply_custom_paths_to_configs(
-            st.session_state.course_configs,
-            st.session_state.custom_paths
-        )
-        
-        if changes:
-            st.session_state.career_path_changes = changes
-            st.success(f"Made {len(changes)} updates to course configurations based on career paths!")
-            
-            # Show summary of changes
-            with st.expander("View Changes", expanded=True):
-                # Count changes by type
-                change_counts = defaultdict(int)
-                for change in changes:
-                    change_counts[change['action']] += 1
-                
-                # Display counts
-                st.write("### Changes Summary")
-                for action, count in change_counts.items():
-                    if action == 'set_prerequisites':
-                        st.write(f"• Set prerequisites for {count} courses")
-                    elif action == 'added_to_mos_path':
-                        st.write(f"• Added {count} courses to MOS paths")
-                    elif action == 'added_as_flexible_course':
-                        st.write(f"• Added {count} flexible courses to MOS paths")
-                
-                # Option to see all changes
-                if st.checkbox("Show all changes"):
-                    for change in changes:
-                        course = change['course']
-                        mos = change['mos']
-                        action = change['action']
-                        
-                        if action == 'set_prerequisites':
-                            prereqs = change['prerequisites']
-                            st.write(f"• Set prerequisites for {course} ({mos}): {', '.join(prereqs)}")
-                        elif action == 'added_to_mos_path':
-                            st.write(f"• Added {course} to {mos} career path")
-                        elif action == 'added_as_flexible_course':
-                            st.write(f"• Added {course} as a flexible course for {mos}")
-            
-            # Option to apply changes
-            if st.button("Confirm and Update Configurations"):
-                st.session_state.course_configs = updated_configs
-                st.success("Course configurations updated successfully!")
-                st.rerun()
-        else:
-            st.info("No changes needed. Course configurations already match the career paths.")
         
     # Save configuration button
     if st.button("Save Configuration"):
