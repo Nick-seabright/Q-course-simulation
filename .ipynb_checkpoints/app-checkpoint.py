@@ -85,6 +85,7 @@ def display_upload_page():
         st.markdown("""
         ### Required Data Format
         Your CSV file should include the following columns:
+
         | Column Name | Description | Example |
         |-------------|-------------|---------|
         | FY | Fiscal Year | 2025 |
@@ -108,7 +109,9 @@ def display_upload_page():
         | CP Pers Type | Personnel type | E |
         | Group Type | Student group type | ADE |
         | Training MOS | Military Occupational Specialty (optional) | 18B |
+
         **Important Status Codes:**
+
         **INPUT STAT:**
         - H = HOLD (SHOWED DID NOT START OR DID NOT GRAD)
         - I = NEW INPUT
@@ -116,24 +119,29 @@ def display_upload_page():
         - N = NO SHOW
         - Q = RECYCLE IN, FROM ANOTHER CLASS, SAME COURSE
         - U = SHOWED, DID NOT BEGIN TRNG (POST APPROP REASON CODE)
+
         **OUT STAT:**
         - G = GRADUATE, SUCCESSFULLY COMPLETED CLASS
         - K = RETRAINEE OUT, TO ANOTHER COURSE OF INSTRUCTION
         - L = RECYCLE OUT, TO ANOTHER CLASS, SAME COURSE
         - Z = NON-SUCCESSFUL COMPLETION
+
         **RES STAT (Reservation Status):**
         - C = CANCELLED RESERVATION
         - R = VALID RESERVATION
         - M = MEP RESERVATION
         - W = WAITING FOR RESERVATION
+
         **CP Pers Type:**
         - O = Officer
         - E = Enlisted
+
         **Group Type Examples:**
         - ADE = Active Duty Enlisted
         - OF = Officer
         - NG = National Guard
-        """)
+        """, unsafe_allow_html=False)
+        
         # Option to download a sample CSV
         sample_data = """FY,Course Number,Course Title,NAME,SSN,Arrival Date,CLS,Cls Start Date,Cls End Date,Res Stat,Reserve Reason,Reserve Reason Description,Input Stat,Input Date,Input Reason,Input Reason Description,Out Stat,Output Date,CP Pers Type,Group Type,Training MOS
         2025,2E-F253/011-F95,SF QUAL (ORIENTATION),SEABRIGHT NICK J,123456789,5/24/2025,003,5/27/2025,5/30/2025,R,,,I,5/27/2025,,,G,5/30/2025,E,ADE,18B
