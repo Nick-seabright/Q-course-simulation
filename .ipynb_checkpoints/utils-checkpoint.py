@@ -1027,7 +1027,7 @@ def apply_custom_paths_to_configs(course_configs, custom_paths):
     
     # Process each MOS path
     for mos, path_data in custom_paths.items():
-        typical_path = path_data['path']
+        typical_path = path_data.get('path', [])
         flexible_courses = path_data.get('flexible_courses', [])
         
         # Skip if the path is empty
@@ -1111,7 +1111,7 @@ def apply_custom_paths_to_configs(course_configs, custom_paths):
                 updated_configs[course]['mos_paths'][mos] = []
                 
                 # Record if this is a new addition
-                if not any(change['course'] == course and change['mos'] == mos and change['action'] == 'added_to_mos_path' for change in changes_made):
+                if not any(change['course'] == course and change['mos'] == mos and change['action'] == 'added_as_flexible_course' for change in changes_made):
                     changes_made.append({
                         'course': course,
                         'mos': mos,
