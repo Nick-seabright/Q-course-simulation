@@ -690,11 +690,11 @@ def display_career_path_builder():
     # Initialize custom paths in session state if not present
     if 'custom_paths' not in st.session_state:
         st.session_state.custom_paths = {
-            '18A': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}, 'or_group_positions': {}},
-            '18B': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}, 'or_group_positions': {}},
-            '18C': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}, 'or_group_positions': {}},
-            '18D': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}, 'or_group_positions': {}},
-            '18E': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}, 'or_group_positions': {}}
+            '18A': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}},
+            '18B': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}},
+            '18C': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}},
+            '18D': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}},
+            '18E': {'path': [], 'flexible_courses': [], 'or_groups': [], 'flexible_constraints': {}}
         }
     
     # Add General path option
@@ -704,8 +704,13 @@ def display_career_path_builder():
             'flexible_courses': [], 
             'or_groups': [], 
             'flexible_constraints': {},
-            'or_group_positions': {}
+            'path_order': []  # New field to store the order of elements (courses and OR groups)
         }
+    
+    # Make sure all paths have the path_order field
+    for mos in st.session_state.custom_paths:
+        if 'path_order' not in st.session_state.custom_paths[mos]:
+            st.session_state.custom_paths[mos]['path_order'] = []
     
     # Get all available courses
     all_courses = []
@@ -724,7 +729,7 @@ def display_career_path_builder():
     all_courses = sorted(list(set(all_courses)))
     
     # Debug information
-    st.write(f"Found {len(all_courses)} unique courses")
+    st.write(f"Debug: Found {len(all_courses)} unique courses")
     with st.expander("Available Courses"):
         for i, course in enumerate(all_courses):
             st.write(f"{i+1}. {course}")
@@ -741,14 +746,15 @@ def display_career_path_builder():
         with path_tabs[i]:
             st.write(f"### {mos} Career Path")
             
-            # Get the current path
+            # Get the current path data
             path_data = st.session_state.custom_paths[mos]
             current_path = path_data.get('path', [])
             flexible_courses = path_data.get('flexible_courses', [])
             or_groups = path_data.get('or_groups', []) if 'or_groups' in path_data else []
             flexible_constraints = path_data.get('flexible_constraints', {}) if 'flexible_constraints' in path_data else {}
+            path_order = path_data.get('path_order', [])
             
-            # Ensure the structure exists
+            # Initialize structures if they don't exist
             if 'or_groups' not in path_data:
                 path_data['or_groups'] = []
                 or_groups = []
@@ -756,237 +762,262 @@ def display_career_path_builder():
             if 'flexible_constraints' not in path_data:
                 path_data['flexible_constraints'] = {}
                 flexible_constraints = {}
-                
-            # Track path position for OR groups
-            if 'or_group_positions' not in path_data:
-                path_data['or_group_positions'] = {}
-            or_group_positions = path_data.get('or_group_positions', {})
+            
+            if 'path_order' not in path_data:
+                # Initialize path_order based on current_path if it's empty
+                path_data['path_order'] = [{'type': 'course', 'content': course} for course in current_path]
+                path_order = path_data['path_order']
             
             # Debug information for this MOS
-            st.write(f"Path has {len(current_path)} courses, {len(or_groups)} OR groups, {len(flexible_courses)} flexible courses")
+            st.write(f"Debug: Current path has {len(current_path)} courses, {len(or_groups)} OR groups, {len(path_order)} ordered elements")
             
             # Build Career Path
-            st.write("### Build Career Path")
-            st.write("Add courses in sequence to create a career path. Courses will automatically get prerequisites based on their order.")
+            st.write("### Add Elements to Path")
+            st.write("Add courses and OR groups to your career path in sequence.")
             
-            # Add course to path
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                # Get courses that aren't already in any path or OR group
-                all_used_courses = set(current_path)
-                for group in or_groups:
-                    all_used_courses.update(group)
-                all_used_courses.update(flexible_courses)
-                
-                available_courses = [c for c in all_courses if c not in all_used_courses]
-                if not available_courses:
-                    st.warning("All courses have been added to either the path or flexible courses.")
-                    new_course = ""
-                else:
-                    new_course = st.selectbox(
-                        "Add Course to Path",
-                        options=[""] + available_courses,
-                        key=f"add_course_{mos}"
-                    )
-            with col2:
-                add_button = st.button("Add", key=f"add_button_{mos}")
-                if add_button and new_course:
-                    current_path.append(new_course)
-                    st.session_state.custom_paths[mos]['path'] = current_path
-                    st.success(f"Added {new_course} to path")
-                    st.rerun()
+            # Create tabs for adding different element types
+            add_element_tabs = st.tabs(["Add Course", "Add OR Group"])
             
-            # Display and edit the current path
-            if current_path:
-                st.write("### Current Path Order")
+            # Tab for adding a course
+            with add_element_tabs[0]:
+                # Get courses that aren't already in the path
+                used_courses = current_path + [course for group in or_groups for course in group] + flexible_courses
+                available_courses = [c for c in all_courses if c not in used_courses]
                 
-                # Build a combined path that includes OR groups in their positions
-                combined_path = []
-                combined_types = []  # Track if each item is a regular course or OR group
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    if not available_courses:
+                        st.warning("All courses have been added to the path or OR groups.")
+                        new_course = ""
+                    else:
+                        new_course = st.selectbox(
+                            "Select Course to Add",
+                            options=[""] + available_courses,
+                            key=f"add_course_{mos}"
+                        )
                 
-                # Add regular courses and OR groups in order
-                regular_course_positions = list(range(len(current_path)))
-                all_or_positions = [(or_group_positions.get(f"group_{i}", 0), i) for i in range(len(or_groups))]
+                with col2:
+                    add_button = st.button("Add Course", key=f"add_button_{mos}")
+                    if add_button and new_course:
+                        # Add to current path
+                        current_path.append(new_course)
+                        # Add to path order
+                        path_order.append({'type': 'course', 'content': new_course})
+                        # Update session state
+                        st.session_state.custom_paths[mos]['path'] = current_path
+                        st.session_state.custom_paths[mos]['path_order'] = path_order
+                        st.success(f"Added {new_course} to path")
+                        st.rerun()
+            
+            # Tab for adding an OR group
+            with add_element_tabs[1]:
+                st.write("Create a new OR group (students must take ONE course from the group)")
                 
-                # Sort all positions
-                all_positions = [(pos, 'regular', idx) for idx, pos in enumerate(regular_course_positions)]
-                all_positions.extend([(pos, 'or_group', idx) for pos, idx in all_or_positions])
-                all_positions.sort()  # Sort by position
+                # Create a temporary OR group in session state if it doesn't exist
+                if f'temp_or_group_{mos}' not in st.session_state:
+                    st.session_state[f'temp_or_group_{mos}'] = []
                 
-                # Build the combined path
-                for pos, item_type, idx in all_positions:
-                    if item_type == 'regular':
-                        combined_path.append(current_path[idx])
-                        combined_types.append('regular')
-                    else:  # or_group
-                        group_courses = " OR ".join(or_groups[idx]) if or_groups[idx] else "Empty Group"
-                        combined_path.append(f"[OR Group {idx+1}: {group_courses}]")
-                        combined_types.append('or_group')
+                # Get courses that aren't in the current path or in other OR groups
+                used_in_path = current_path + [course for group in or_groups for course in group]
+                available_for_or = [c for c in all_courses if c not in used_in_path]
                 
-                # Display combined path
-                path_df = pd.DataFrame({
-                    "Position": range(1, len(combined_path)+1),
-                    "Course/Group": combined_path,
-                    "Type": combined_types
-                })
-                
-                # Display styled dataframe
-                st.dataframe(
-                    path_df,
-                    hide_index=True, 
-                    use_container_width=True
+                # Allow selecting multiple courses for the OR group
+                selected_courses = st.multiselect(
+                    "Select courses for this OR group",
+                    options=available_for_or,
+                    default=st.session_state[f'temp_or_group_{mos}'],
+                    key=f"new_or_group_{mos}"
                 )
                 
-                # Manual reordering controls for regular courses
-                st.write("### Reorder Courses")
+                # Update the temporary OR group
+                st.session_state[f'temp_or_group_{mos}'] = selected_courses
+                
+                if st.button("Add OR Group to Path", key=f"add_or_group_to_path_{mos}") and selected_courses:
+                    # Add to OR groups
+                    or_groups.append(selected_courses)
+                    # Add to path order
+                    path_order.append({'type': 'or_group', 'content': len(or_groups) - 1})  # Store index of the OR group
+                    # Update session state
+                    st.session_state.custom_paths[mos]['or_groups'] = or_groups
+                    st.session_state.custom_paths[mos]['path_order'] = path_order
+                    # Clear temporary group
+                    st.session_state[f'temp_or_group_{mos}'] = []
+                    st.success(f"Added OR group with {len(selected_courses)} courses to path")
+                    st.rerun()
+            
+            # Display and edit the current path order
+            if path_order:
+                st.write("### Current Path Order")
+                
+                # Display path with positions
+                path_items = []
+                for pos, item in enumerate(path_order):
+                    item_type = item['type']
+                    if item_type == 'course':
+                        path_items.append({
+                            "Position": pos + 1,
+                            "Type": "Course",
+                            "Content": item['content']
+                        })
+                    elif item_type == 'or_group':
+                        group_idx = item['content']
+                        if group_idx < len(or_groups):
+                            group_courses = or_groups[group_idx]
+                            path_items.append({
+                                "Position": pos + 1,
+                                "Type": "OR Group",
+                                "Content": f"Group {group_idx + 1}: {' OR '.join(group_courses)}"
+                            })
+                
+                # Display as a table
+                path_df = pd.DataFrame(path_items)
+                st.dataframe(path_df, hide_index=True, use_container_width=True)
+                
+                # Reordering controls
+                st.write("### Reorder Path Elements")
                 col1, col2, col3 = st.columns([3, 2, 1])
                 
                 with col1:
-                    selected_course = st.selectbox(
-                        "Select course to move", 
-                        options=current_path,
-                        key=f"move_course_{mos}"
+                    # Create options that show both type and content
+                    reorder_options = []
+                    for pos, item in enumerate(path_order):
+                        item_type = item['type']
+                        if item_type == 'course':
+                            reorder_options.append(f"Pos {pos+1}: Course - {item['content']}")
+                        elif item_type == 'or_group':
+                            group_idx = item['content']
+                            if group_idx < len(or_groups):
+                                group_courses = or_groups[group_idx]
+                                reorder_options.append(f"Pos {pos+1}: OR Group {group_idx+1} - {' OR '.join(group_courses)}")
+                    
+                    selected_item = st.selectbox(
+                        "Select element to move",
+                        options=reorder_options,
+                        key=f"move_element_{mos}"
                     )
+                    
+                    # Extract position from selection
+                    selected_pos = int(selected_item.split(':')[0].replace('Pos ', '')) - 1
                 
                 with col2:
-                    # Get current position (1-based for user interface)
-                    current_position = current_path.index(selected_course) + 1 if selected_course in current_path else 1
-                    
                     # New position input
                     new_position = st.number_input(
-                        "Move to position", 
-                        min_value=1, 
-                        max_value=len(current_path),
-                        value=current_position,
+                        "Move to position",
+                        min_value=1,
+                        max_value=len(path_order),
+                        value=selected_pos + 1,
                         key=f"new_position_{mos}"
                     )
                 
                 with col3:
                     # Apply move button
                     if st.button("Move", key=f"apply_move_{mos}"):
-                        # Remove from current position (0-based index)
-                        current_path.remove(selected_course)
+                        # Get the item to move
+                        item_to_move = path_order[selected_pos]
+                        # Remove from current position
+                        path_order.pop(selected_pos)
                         # Insert at new position (adjust for 0-based indexing)
-                        current_path.insert(new_position - 1, selected_course)
-                        st.session_state.custom_paths[mos]['path'] = current_path
-                        st.success(f"Moved {selected_course} to position {new_position}")
+                        path_order.insert(new_position - 1, item_to_move)
+                        # Update session state
+                        st.session_state.custom_paths[mos]['path_order'] = path_order
+                        st.success(f"Moved element to position {new_position}")
                         st.rerun()
                 
-                # Option to remove courses
-                st.write("### Remove Course")
-                course_to_remove = st.selectbox(
-                    "Remove Course from Path",
-                    options=[""] + current_path,
-                    key=f"remove_course_{mos}"
+                # Remove element button
+                st.write("### Remove Path Element")
+                element_to_remove = st.selectbox(
+                    "Select element to remove",
+                    options=reorder_options,
+                    key=f"remove_element_{mos}"
                 )
-                if st.button("Remove", key=f"remove_button_{mos}") and course_to_remove:
-                    current_path.remove(course_to_remove)
+                
+                # Extract position from selection
+                remove_pos = int(element_to_remove.split(':')[0].replace('Pos ', '')) - 1
+                
+                if st.button("Remove Element", key=f"remove_element_button_{mos}"):
+                    # Get the item to remove
+                    item_to_remove = path_order[remove_pos]
+                    item_type = item_to_remove['type']
+                    
+                    # Remove from path_order
+                    path_order.pop(remove_pos)
+                    
+                    # Also remove from the corresponding list
+                    if item_type == 'course':
+                        course_to_remove = item_to_remove['content']
+                        if course_to_remove in current_path:
+                            current_path.remove(course_to_remove)
+                    elif item_type == 'or_group':
+                        group_idx = item_to_remove['content']
+                        # We need to adjust all or_group references in path_order that come after this one
+                        for item in path_order:
+                            if item['type'] == 'or_group' and item['content'] > group_idx:
+                                item['content'] -= 1
+                        # Remove the OR group
+                        if group_idx < len(or_groups):
+                            or_groups.pop(group_idx)
+                    
+                    # Update session state
                     st.session_state.custom_paths[mos]['path'] = current_path
-                    st.success(f"Removed {course_to_remove} from path")
+                    st.session_state.custom_paths[mos]['or_groups'] = or_groups
+                    st.session_state.custom_paths[mos]['path_order'] = path_order
+                    st.success("Element removed from path")
                     st.rerun()
-            else:
-                st.info("No courses in path yet. Add courses using the dropdown above.")
             
-            # OR Groups Section - Courses where student must take one from the group
-            st.write("### OR Course Groups")
-            st.write("Add groups of courses where a student must complete ONE course from EACH group.")
-            
-            # Add a new OR group button above the groups
-            if st.button("Add New OR Group", key=f"add_or_group_{mos}"):
-                new_group_id = f"group_{len(or_groups)}"
-                or_groups.append([])
-                # Default position is at the end of the current path
-                or_group_positions[new_group_id] = len(current_path)
-                st.session_state.custom_paths[mos]['or_groups'] = or_groups
-                st.session_state.custom_paths[mos]['or_group_positions'] = or_group_positions
-                st.success("Added new OR Group")
-                st.rerun()
-                
-            # Display existing OR groups
-            for i, group in enumerate(or_groups):
-                group_id = f"group_{i}"
-                st.write(f"**OR Group {i+1}:**")
-                
-                # Use columns for group editing
-                cols = st.columns([3, 2, 1])
-                
-                with cols[0]:
-                    # We need to include all courses as options except those already in the path or in other groups
-                    used_in_other_groups = set()
-                    for j, other_group in enumerate(or_groups):
-                        if i != j:  # Don't exclude courses from this group
-                            used_in_other_groups.update(other_group)
+            # OR Groups Section - Edit existing groups
+            if or_groups:
+                st.write("### Edit OR Groups")
+                for i, group in enumerate(or_groups):
+                    st.write(f"**OR Group {i+1}:**")
+                    cols = st.columns([3, 1])
                     
-                    available_or_courses = [c for c in all_courses if c not in current_path 
-                                          and c not in flexible_courses 
-                                          and c not in used_in_other_groups]
-                    
-                    # Make sure current group members are in options
-                    for course in group:
-                        if course not in available_or_courses:
-                            available_or_courses.append(course)
-                    
-                    # Store selections in session state to prevent reloading
-                    group_key = f"or_group_{mos}_{i}"
-                    if group_key not in st.session_state:
-                        st.session_state[group_key] = group.copy()
-                    
-                    # Display multiselect for group courses
-                    updated_group = st.multiselect(
-                        f"Select courses for Group {i+1}:",
-                        options=available_or_courses,
-                        default=group,  # Use the actual group directly, not session state
-                        key=group_key
-                    )
-                
-                with cols[1]:
-                    # Position selection for the OR group in the path
-                    position_options = list(range(len(current_path) + 1))
-                    position_labels = ["Start of path"] + [f"After: {current_path[j]}" for j in range(len(current_path))]
-                    
-                    # Get the current position with a default
-                    current_position = or_group_positions.get(group_id, 0)
-                    
-                    # Ensure index is valid
-                    position_index = min(current_position, len(position_options)-1) if position_options else 0
-                    
-                    # Show position selector
-                    position_key = f"position_{mos}_{i}"
-                    if position_key not in st.session_state:
-                        st.session_state[position_key] = position_index
+                    with cols[0]:
+                        # For editing, we include all available courses plus the current group members
+                        edit_options = [c for c in all_courses if c not in current_path and (c in group or c not in [course for g in or_groups for course in g if g != group])]
                         
-                    selected_position = st.selectbox(
-                        "Position in path:",
-                        options=position_options,
-                        format_func=lambda x: position_labels[x] if x < len(position_labels) else "End of path",
-                        index=position_index,
-                        key=f"position_{mos}_{i}"
-                    )
-                
-                with cols[2]:
-                    # Option to delete this group
-                    if st.button(f"Delete", key=f"delete_or_group_{mos}_{i}"):
-                        or_groups.pop(i)
-                        # Also remove the position
-                        if group_id in or_group_positions:
-                            del or_group_positions[group_id]
+                        # Use a unique key for each group's multiselect
+                        updated_group = st.multiselect(
+                            f"Edit courses for OR Group {i+1}",
+                            options=edit_options,
+                            default=group,
+                            key=f"edit_or_group_{mos}_{i}"
+                        )
+                        
+                        # Update the group
+                        or_groups[i] = updated_group
+                        # Update the session state immediately to prevent losing selections
                         st.session_state.custom_paths[mos]['or_groups'] = or_groups
-                        st.session_state.custom_paths[mos]['or_group_positions'] = or_group_positions
-                        st.success(f"Deleted OR Group {i+1}")
-                        st.rerun()
                     
-                    # Button to update the group
-                    if st.button(f"Update", key=f"update_or_group_{mos}_{i}"):
-                        or_groups[i] = updated_group  # Get value directly from the widget result
-                        or_group_positions[group_id] = selected_position
-                        st.session_state.custom_paths[mos]['or_groups'] = or_groups
-                        st.session_state.custom_paths[mos]['or_group_positions'] = or_group_positions
-                        st.success(f"Updated Group {i+1}")
-                        st.rerun()
+                    with cols[1]:
+                        # Option to delete this group
+                        if st.button(f"Delete Group {i+1}", key=f"delete_or_group_{mos}_{i}"):
+                            # Remove from or_groups
+                            or_groups.pop(i)
                             
-            # Save OR groups
-            st.session_state.custom_paths[mos]['or_groups'] = or_groups
-            st.session_state.custom_paths[mos]['or_group_positions'] = or_group_positions
+                            # Remove from path_order and adjust indices
+                            new_path_order = []
+                            for item in path_order:
+                                if item['type'] == 'or_group':
+                                    if item['content'] == i:
+                                        # Skip this item (it's being deleted)
+                                        continue
+                                    elif item['content'] > i:
+                                        # Adjust index for groups that come after
+                                        new_item = item.copy()
+                                        new_item['content'] -= 1
+                                        new_path_order.append(new_item)
+                                    else:
+                                        # Keep as is
+                                        new_path_order.append(item)
+                                else:
+                                    # Keep courses as is
+                                    new_path_order.append(item)
+                            
+                            # Update session state
+                            st.session_state.custom_paths[mos]['or_groups'] = or_groups
+                            st.session_state.custom_paths[mos]['path_order'] = new_path_order
+                            st.success(f"Deleted OR Group {i+1}")
+                            st.rerun()
             
             # Flexible Courses Section
             st.write("### Flexible Courses")
@@ -996,12 +1027,9 @@ def display_career_path_builder():
             col1, col2 = st.columns([3, 1])
             with col1:
                 # Get courses that aren't already in any path
-                all_used_courses = set(current_path)
-                for group in or_groups:
-                    all_used_courses.update(group)
-                all_used_courses.update(flexible_courses)
+                used_courses = current_path + [course for group in or_groups for course in group] + flexible_courses
+                available_flex_courses = [c for c in all_courses if c not in used_courses]
                 
-                available_flex_courses = [c for c in all_courses if c not in all_used_courses]
                 if not available_flex_courses:
                     st.warning("All courses have been added to either the path or flexible courses.")
                     new_flexible = ""
@@ -1042,44 +1070,33 @@ def display_career_path_builder():
                             'must_be_after': []
                         }
                     
-                    # Create session state keys for constraints
-                    before_key = f"before_{mos}_{i}"
-                    after_key = f"after_{mos}_{i}"
-                    
-                    # Initialize session state for constraints
-                    if before_key not in st.session_state:
-                        st.session_state[before_key] = flexible_constraints[course].get('must_be_before', [])
-                    
-                    if after_key not in st.session_state:
-                        st.session_state[after_key] = flexible_constraints[course].get('must_be_after', [])
+                    # Extract path courses for constraints (both regular courses and courses from OR groups)
+                    path_courses = current_path.copy()
                     
                     # Before constraints
                     with constraint_cols[0]:
+                        before_constraints = flexible_constraints[course].get('must_be_before', [])
                         selected_before = st.multiselect(
                             f"Must be taken BEFORE these courses:",
-                            options=current_path,
-                            default=st.session_state[before_key],
-                            key=before_key
+                            options=path_courses,
+                            default=before_constraints,
+                            key=f"before_{mos}_{i}"
                         )
-                        st.session_state[before_key] = selected_before
+                        flexible_constraints[course]['must_be_before'] = selected_before
                     
                     # After constraints
                     with constraint_cols[1]:
+                        after_constraints = flexible_constraints[course].get('must_be_after', [])
                         selected_after = st.multiselect(
                             f"Must be taken AFTER these courses:",
-                            options=current_path,
-                            default=st.session_state[after_key],
-                            key=after_key
+                            options=path_courses,
+                            default=after_constraints,
+                            key=f"after_{mos}_{i}"
                         )
-                        st.session_state[after_key] = selected_after
-                    
-                    # Update button for this flexible course
-                    if st.button("Update Constraints", key=f"update_constraints_{mos}_{i}"):
-                        flexible_constraints[course]['must_be_before'] = selected_before
                         flexible_constraints[course]['must_be_after'] = selected_after
-                        st.session_state.custom_paths[mos]['flexible_constraints'] = flexible_constraints
-                        st.success(f"Updated constraints for {course}")
-                        st.rerun()
+                
+                # Save flexible constraints immediately
+                st.session_state.custom_paths[mos]['flexible_constraints'] = flexible_constraints
                 
                 # Display list of flexible courses
                 st.write("### Current flexible courses:")
@@ -1106,107 +1123,101 @@ def display_career_path_builder():
             else:
                 st.info("No flexible courses defined yet.")
             
-            # Save flexible constraints
-            st.session_state.custom_paths[mos]['flexible_constraints'] = flexible_constraints
-            
-            # Move between path and flexible
-            if current_path and flexible_courses:
-                st.write("### Move Courses")
-                col1, col2 = st.columns(2)
-                with col1:
-                    # Move from path to flexible
-                    path_to_flexible = st.selectbox(
-                        "Move from Path to Flexible",
-                        options=[""] + current_path,
-                        key=f"path_to_flexible_{mos}"
-                    )
-                    if st.button("Move to Flexible", key=f"path_to_flexible_button_{mos}") and path_to_flexible:
-                        current_path.remove(path_to_flexible)
-                        flexible_courses.append(path_to_flexible)
-                        # Initialize constraints for this course
-                        if path_to_flexible not in flexible_constraints:
-                            flexible_constraints[path_to_flexible] = {
-                                'must_be_before': [],
-                                'must_be_after': []
-                            }
-                        st.session_state.custom_paths[mos]['path'] = current_path
-                        st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
-                        st.session_state.custom_paths[mos]['flexible_constraints'] = flexible_constraints
-                        st.success(f"Moved {path_to_flexible} to flexible courses")
-                        st.rerun()
-                with col2:
-                    # Move from flexible to path
-                    flexible_to_path = st.selectbox(
-                        "Move from Flexible to Path",
-                        options=[""] + flexible_courses,
-                        key=f"flexible_to_path_{mos}"
-                    )
-                    if st.button("Move to Path", key=f"flexible_to_path_button_{mos}") and flexible_to_path:
-                        flexible_courses.remove(flexible_to_path)
-                        current_path.append(flexible_to_path)
-                        # Remove from constraints when moving to the main path
-                        if flexible_to_path in flexible_constraints:
-                            del flexible_constraints[flexible_to_path]
-                        st.session_state.custom_paths[mos]['path'] = current_path
-                        st.session_state.custom_paths[mos]['flexible_courses'] = flexible_courses
-                        st.session_state.custom_paths[mos]['flexible_constraints'] = flexible_constraints
-                        st.success(f"Moved {flexible_to_path} to path")
-                        st.rerun()
-            
             # Show the current path visualization
-            if current_path or flexible_courses or or_groups:
+            if path_order or flexible_courses:
                 st.write("### Career Path Visualization")
                 
                 # Create a Plotly figure for the visualization
                 fig = go.Figure()
                 
-                # Calculate positions for the visualization based on the combined path
-                visual_positions = {}
-                current_pos = 0
+                # Calculate the y-positions for different elements
+                main_path_y = 0
+                or_group_y_start = -1
+                flexible_y = 1
                 
-                # Create a combined ordered list of all path elements
-                combined_items = []
-                
-                # Add regular courses with their positions
-                for idx, course in enumerate(current_path):
-                    combined_items.append(('regular', idx, current_pos))
-                    visual_positions[course] = current_pos
-                    current_pos += 1
-                
-                # Add OR groups with their positions
-                for i in range(len(or_groups)):
-                    group_id = f"group_{i}"
-                    position = or_group_positions.get(group_id, 0)
-                    # Insert at the right position
-                    combined_items.append(('or_group', i, position))
-                
-                # Sort all items by their position
-                combined_items.sort(key=lambda x: x[2])
-                
-                # Plot the main path courses
-                for course in current_path:
-                    pos = visual_positions.get(course, 0)
-                    fig.add_trace(go.Scatter(
-                        x=[pos],
-                        y=[0],
-                        mode='markers+text',
-                        text=[course],
-                        textposition='top center',
-                        marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
-                        name=course
-                    ))
-                
-                # Add connecting lines between courses in the path
-                for i in range(len(current_path) - 1):
-                    pos1 = visual_positions.get(current_path[i], 0)
-                    pos2 = visual_positions.get(current_path[i+1], 0)
+                # Plot the main path in sequence (including OR groups)
+                for j, item in enumerate(path_order):
+                    item_type = item['type']
                     
-                    if pos2 > pos1:
+                    if item_type == 'course':
+                        course = item['content']
+                        # Plot regular course
+                        fig.add_trace(go.Scatter(
+                            x=[j],
+                            y=[main_path_y],
+                            mode='markers+text',
+                            text=[course],
+                            textposition='top center',
+                            marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
+                            name=course
+                        ))
+                        
+                    elif item_type == 'or_group':
+                        group_idx = item['content']
+                        if group_idx < len(or_groups):
+                            group_courses = or_groups[group_idx]
+                            
+                            # Add a special marker for the OR group in the main path
+                            fig.add_trace(go.Scatter(
+                                x=[j],
+                                y=[main_path_y],
+                                mode='markers+text',
+                                text=[f"OR Group {group_idx+1}"],
+                                textposition='top center',
+                                marker=dict(size=20, color='rgba(219, 68, 55, 0.8)', symbol='diamond'),
+                                name=f"OR Group {group_idx+1}"
+                            ))
+                            
+                            # Add the OR group courses below
+                            or_group_y = or_group_y_start - group_idx
+                            
+                            # Add a label for the OR group
+                            fig.add_annotation(
+                                x=j - 0.3,
+                                y=or_group_y,
+                                text=f"Take ONE:",
+                                showarrow=False,
+                                font=dict(size=12),
+                                xanchor="right"
+                            )
+                            
+                            # Plot courses in the OR group in a vertical arrangement
+                            for c_idx, course in enumerate(group_courses):
+                                # Plot OR group course below the main path
+                                fig.add_trace(go.Scatter(
+                                    x=[j + 0.1 * c_idx],  # Offset slightly for visibility
+                                    y=[or_group_y],
+                                    mode='markers+text',
+                                    text=[course],
+                                    textposition='bottom center',
+                                    marker=dict(size=15, color='rgba(219, 68, 55, 0.8)'),
+                                    name=f"OR{group_idx+1}: {course}"
+                                ))
+                                
+                                # Connect to the OR group marker in the main path
+                                fig.add_annotation(
+                                    x=j,
+                                    y=main_path_y,
+                                    ax=j + 0.1 * c_idx,
+                                    ay=or_group_y,
+                                    xref='x',
+                                    yref='y',
+                                    axref='x',
+                                    ayref='y',
+                                    showarrow=True,
+                                    arrowhead=2,
+                                    arrowsize=1,
+                                    arrowwidth=1,
+                                    arrowcolor='rgba(219, 68, 55, 0.5)'
+                                )
+                    
+                    # Add connecting lines between path elements
+                    if j < len(path_order) - 1:
                         fig.add_annotation(
-                            x=pos1+0.5,
-                            y=0,
-                            ax=pos1,
-                            ay=0,
+                            x=j+0.5,
+                            y=main_path_y,
+                            ax=j,
+                            ay=main_path_y,
                             xref='x',
                             yref='y',
                             axref='x',
@@ -1218,59 +1229,13 @@ def display_career_path_builder():
                             arrowcolor='rgba(66, 133, 244, 0.8)'
                         )
                 
-                # Plot OR groups
-                for group_idx, group in enumerate(or_groups):
-                    if not group:  # Skip empty groups
-                        continue
-                    
-                    # Get position for this OR group
-                    group_id = f"group_{group_idx}"
-                    position = or_group_positions.get(group_id, 0)
-                    
-                    # Position OR groups below the main path
-                    y_position = -1 - group_idx % 3  # Stack OR groups if there are many
-                    
-                    # Add a label for the OR group
-                    fig.add_annotation(
-                        x=position,
-                        y=y_position - 0.5,
-                        text=f"OR Group {group_idx+1}",
-                        showarrow=False,
-                        font=dict(size=12),
-                        xanchor="center"
-                    )
-                    
-                    # Add courses in the OR group
-                    for c_idx, course in enumerate(group):
-                        x_offset = (c_idx - (len(group) - 1) / 2) * 0.3  # Center the group
-                        fig.add_trace(go.Scatter(
-                            x=[position + x_offset],
-                            y=[y_position],
-                            mode='markers+text',
-                            text=[course],
-                            textposition='bottom center',
-                            marker=dict(size=15, color='rgba(219, 68, 55, 0.8)'),
-                            name=f"OR{group_idx+1}: {course}"
-                        ))
-                    
-                    # Add a vertical line from the OR group to the path
-                    fig.add_shape(
-                        type="line",
-                        x0=position,
-                        y0=y_position,
-                        x1=position,
-                        y1=-0.2,
-                        line=dict(color="rgba(219, 68, 55, 0.8)", width=2, dash="dot"),
-                    )
-                
                 # Plot flexible courses with constraints
                 for f_idx, course in enumerate(flexible_courses):
                     # Position flexible courses above the main path
-                    y_position = 1 + f_idx % 3  # Stack flexible courses if there are many
-                    x_position = f_idx // 3  # Spread out horizontally for better visibility
+                    y_position = flexible_y
                     
                     fig.add_trace(go.Scatter(
-                        x=[x_position],
+                        x=[f_idx],
                         y=[y_position],
                         mode='markers+text',
                         text=[course],
@@ -1285,47 +1250,49 @@ def display_career_path_builder():
                         before_courses = constraints.get('must_be_before', [])
                         after_courses = constraints.get('must_be_after', [])
                         
-                        # Draw lines to before courses (must be taken before these)
+                        # Find x-positions of constraint courses in the path
                         for before_course in before_courses:
-                            if before_course in current_path:
-                                target_idx = current_path.index(before_course)
-                                target_pos = visual_positions.get(before_course, 0)
-                                fig.add_annotation(
-                                    x=target_pos,
-                                    y=0,
-                                    ax=x_position,
-                                    ay=y_position,
-                                    xref='x',
-                                    yref='y',
-                                    axref='x',
-                                    ayref='y',
-                                    showarrow=True,
-                                    arrowhead=2,
-                                    arrowsize=1,
-                                    arrowwidth=1,
-                                    arrowcolor='rgba(76, 175, 80, 0.5)'
-                                )
+                            # Find this course in the path_order
+                            for path_idx, path_item in enumerate(path_order):
+                                if path_item['type'] == 'course' and path_item['content'] == before_course:
+                                    # Draw constraint line
+                                    fig.add_annotation(
+                                        x=path_idx,
+                                        y=main_path_y,
+                                        ax=f_idx,
+                                        ay=y_position,
+                                        xref='x',
+                                        yref='y',
+                                        axref='x',
+                                        ayref='y',
+                                        showarrow=True,
+                                        arrowhead=2,
+                                        arrowsize=1,
+                                        arrowwidth=1,
+                                        arrowcolor='rgba(76, 175, 80, 0.5)'
+                                    )
                         
-                        # Draw lines from after courses (must be taken after these)
+                        # Draw lines from after courses
                         for after_course in after_courses:
-                            if after_course in current_path:
-                                source_idx = current_path.index(after_course)
-                                source_pos = visual_positions.get(after_course, 0)
-                                fig.add_annotation(
-                                    x=source_pos,
-                                    y=0,
-                                    ax=x_position,
-                                    ay=y_position,
-                                    xref='x',
-                                    yref='y',
-                                    axref='x',
-                                    ayref='y',
-                                    showarrow=True,
-                                    arrowhead=2,
-                                    arrowsize=1,
-                                    arrowwidth=1,
-                                    arrowcolor='rgba(76, 175, 80, 0.5)'
-                                )
+                            # Find this course in the path_order
+                            for path_idx, path_item in enumerate(path_order):
+                                if path_item['type'] == 'course' and path_item['content'] == after_course:
+                                    # Draw constraint line
+                                    fig.add_annotation(
+                                        x=path_idx,
+                                        y=main_path_y,
+                                        ax=f_idx,
+                                        ay=y_position,
+                                        xref='x',
+                                        yref='y',
+                                        axref='x',
+                                        ayref='y',
+                                        showarrow=True,
+                                        arrowhead=2,
+                                        arrowsize=1,
+                                        arrowwidth=1,
+                                        arrowcolor='rgba(76, 175, 80, 0.5)'
+                                    )
                 
                 # Update layout
                 fig.update_layout(
@@ -1333,26 +1300,29 @@ def display_career_path_builder():
                     xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
                     yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
                     margin=dict(l=50, r=20, t=20, b=20),
-                    height=max(400, 150 + len(or_groups) * 50 + len(flexible_courses) * 40),
-                    width=max(800, (len(current_path) + len(or_groups)) * 100)
+                    height=max(300, 100 + len(or_groups) * 50 + (1 if flexible_courses else 0) * 100),
+                    width=max(600, len(path_order) * 100)
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # Add a text representation of the path
                 with st.expander("Path Summary"):
-                    if current_path:
-                        st.write("**Main Path (in order):**")
-                        st.write(" → ".join(current_path))
+                    st.write("**Complete Path (in order):**")
+                    path_str = []
+                    for item in path_order:
+                        if item['type'] == 'course':
+                            path_str.append(item['content'])
+                        elif item['type'] == 'or_group':
+                            group_idx = item['content']
+                            if group_idx < len(or_groups):
+                                group_courses = or_groups[group_idx]
+                                path_str.append(f"[OR Group {group_idx+1}: {' OR '.join(group_courses)}]")
                     
-                    if or_groups:
-                        st.write("**OR Groups (take one course from each group):**")
-                        for i, group in enumerate(or_groups):
-                            if group:
-                                group_id = f"group_{i}"
-                                position = or_group_positions.get(group_id, 0)
-                                position_desc = "At start of path" if position == 0 else f"After {current_path[position-1]}" if position <= len(current_path) else "At end of path"
-                                st.write(f"Group {i+1} ({position_desc}): {' OR '.join(group)}")
+                    if path_str:
+                        st.write(" → ".join(path_str))
+                    else:
+                        st.write("No courses in main path yet.")
                     
                     if flexible_courses:
                         st.write("**Flexible Courses (with constraints):**")
@@ -1388,13 +1358,60 @@ def display_career_path_builder():
         if 'course_configs' not in st.session_state or not st.session_state.course_configs:
             st.error("No course configurations found. Please go to the Course Configuration page first.")
         else:
-            # Apply career paths to configurations
             try:
-                with st.spinner("Applying career paths to configurations..."):
-                    updated_configs, changes = apply_custom_paths_to_configs(
-                        st.session_state.course_configs,
-                        st.session_state.custom_paths
-                    )
+                # First, convert path_order structure to the format expected by apply_custom_paths_to_configs
+                for mos, path_data in st.session_state.custom_paths.items():
+                    path_order = path_data.get('path_order', [])
+                    or_groups = path_data.get('or_groups', [])
+                    
+                    # Rebuild the path and prerequisites based on the path_order
+                    new_path = []
+                    new_prerequisites = {}
+                    
+                    for i, item in enumerate(path_order):
+                        if item['type'] == 'course':
+                            course = item['content']
+                            new_path.append(course)
+                            
+                            # Set prerequisites based on previous item
+                            if i > 0:
+                                prev_item = path_order[i-1]
+                                
+                                if prev_item['type'] == 'course':
+                                    # Simple course-to-course prerequisite
+                                    new_prerequisites[course] = [prev_item['content']]
+                                elif prev_item['type'] == 'or_group':
+                                    # OR group as prerequisite
+                                    group_idx = prev_item['content']
+                                    if group_idx < len(or_groups):
+                                        new_prerequisites[course] = or_groups[group_idx]
+                        
+                        elif item['type'] == 'or_group':
+                            group_idx = item['content']
+                            if group_idx < len(or_groups):
+                                group_courses = or_groups[group_idx]
+                                
+                                # Set prerequisites for all courses in this OR group
+                                if i > 0:
+                                    prev_item = path_order[i-1]
+                                    
+                                    if prev_item['type'] == 'course':
+                                        for or_course in group_courses:
+                                            new_prerequisites[or_course] = [prev_item['content']]
+                                    elif prev_item['type'] == 'or_group':
+                                        prev_group_idx = prev_item['content']
+                                        if prev_group_idx < len(or_groups):
+                                            for or_course in group_courses:
+                                                new_prerequisites[or_course] = or_groups[prev_group_idx]
+                    
+                    # Update the path in the custom_paths
+                    st.session_state.custom_paths[mos]['path'] = new_path
+                
+                # Apply the updated custom paths to configurations
+                updated_configs, changes = apply_custom_paths_to_configs(
+                    st.session_state.course_configs,
+                    st.session_state.custom_paths
+                )
                 
                 if changes:
                     st.session_state.career_path_changes = changes
