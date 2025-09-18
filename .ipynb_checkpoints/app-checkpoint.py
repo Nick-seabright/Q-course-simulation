@@ -314,15 +314,75 @@ def display_upload_page():
                 st.session_state.historical_analysis = historical_analysis
                 progress_bar.progress(50)
                 
-                # Step 3: Extract patterns (75%)
-                historical_arrival_patterns, historical_mos_distribution = cached_extract_patterns(processed_data)
-                st.session_state.historical_arrival_patterns = historical_arrival_patterns
-                st.session_state.historical_mos_distribution = historical_mos_distribution
+                # Step 3: Extract historical arrival patterns (75%)
+                try:
+                    historical_arrival_patterns = extract_historical_arrival_patterns(processed_data)
+                    st.session_state.historical_arrival_patterns = historical_arrival_patterns
+                except Exception as e:
+                    st.warning(f"Could not extract arrival patterns: {e}")
+                    st.session_state.historical_arrival_patterns = None
                 progress_bar.progress(75)
+
+                # Step 4: Extract historical MOS distribution with robust error handling (100%)
+                try:
+                    # Default distribution to use if anything goes wrong
+                    default_distribution = {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+                    
+                    # First check if processed_data has the necessary column
+                    if 'TrainingMOS' in processed_data.columns:
+                        # Count non-null values by MOS
+                        valid_mos_mask = processed_data['TrainingMOS'].notna() & (processed_data['TrainingMOS'] != 'None')
+                        
+                        if valid_mos_mask.sum() > 0:
+                            # Get counts of each MOS
+                            mos_counts = processed_data.loc[valid_mos_mask, 'TrainingMOS'].value_counts()
+                            total_students = mos_counts.sum()
+                            
+                            # Create a clean distribution dictionary
+                            mos_distribution = default_distribution.copy()
+                            
+                            # Process each MOS value
+                            for mos, count in mos_counts.items():
+                                if isinstance(mos, str):
+                                    # Normalize to standard MOS
+                                    if mos in ['18A', '18B', '18C', '18D', '18E']:
+                                        standard_mos = mos
+                                    elif 'OFFICER' in mos.upper() or '18A' in mos.upper():
+                                        standard_mos = '18A'
+                                    elif 'WEAPON' in mos.upper() or '18B' in mos.upper():
+                                        standard_mos = '18B'
+                                    elif 'ENGINEER' in mos.upper() or '18C' in mos.upper():
+                                        standard_mos = '18C'
+                                    elif 'MEDIC' in mos.upper() or '18D' in mos.upper():
+                                        standard_mos = '18D'
+                                    elif 'COMM' in mos.upper() or '18E' in mos.upper():
+                                        standard_mos = '18E'
+                                    else:
+                                        # Deterministic assignment for unknown values
+                                        hash_val = sum(ord(c) for c in mos) % 5
+                                        standard_mos = ['18A', '18B', '18C', '18D', '18E'][hash_val]
+                                    
+                                    # Calculate percentage and add to distribution
+                                    percentage = float(count / total_students)
+                                    mos_distribution[standard_mos] = percentage
+                            
+                            # Normalize distribution to sum to 1.0
+                            total = sum(mos_distribution.values())
+                            if total > 0:
+                                normalized_distribution = {k: v/total for k, v in mos_distribution.items()}
+                                st.session_state.historical_mos_distribution = normalized_distribution
+                            else:
+                                st.session_state.historical_mos_distribution = default_distribution
+                        else:
+                            st.warning("No valid TrainingMOS values found. Using default distribution.")
+                            st.session_state.historical_mos_distribution = default_distribution
+                    else:
+                        st.warning("TrainingMOS column not found. Using default distribution.")
+                        st.session_state.historical_mos_distribution = default_distribution
+                except Exception as e:
+                    st.warning(f"Error extracting MOS distribution: {e}")
+                    st.session_state.historical_mos_distribution = default_distribution
                 
-                # Step 4: Data quality check (100%)
-                # Calculate data quality metrics
-                data_quality = calculate_data_quality(data, processed_data)
                 progress_bar.progress(100)
 
                 # Display data statistics and quality metrics
@@ -341,32 +401,17 @@ def display_upload_page():
                     st.metric("Unique Students", unique_students)
                 
                 with col3:
-                    data_completeness = data_quality.get('completeness', 0)
-                    st.metric("Data Completeness", f"{data_completeness:.1%}")
-                
-                # Show data quality details in an expander
-                with st.expander("Data Quality Details"):
-                    st.write(f"**Missing Values:**")
-                    missing_data = pd.DataFrame({
-                        'Column': data_quality.get('missing_columns', {}).keys(),
-                        'Missing Values (%)': [f"{v:.1%}" for v in data_quality.get('missing_columns', {}).values()]
-                    })
-                    st.dataframe(missing_data, hide_index=True, use_container_width=True)
-                    
-                    if 'duplicate_students' in data_quality:
-                        st.write(f"**Duplicate Student Records:** {data_quality['duplicate_students']}")
-                    
-                    if 'invalid_dates' in data_quality:
-                        st.write(f"**Invalid Dates:** {data_quality['invalid_dates']}")
+                    total_entries = len(data)
+                    st.metric("Total Records", total_entries)
                 
                 # Display extracted patterns
                 with st.expander("Historical Patterns"):
-                    if historical_arrival_patterns:
+                    if st.session_state.historical_arrival_patterns:
                         st.write("### Historical Arrival Patterns")
-                        st.write(f"Average days before class start: {historical_arrival_patterns.get('avg_days_before', 'N/A')}")
+                        st.write(f"Average days before class start: {st.session_state.historical_arrival_patterns.get('avg_days_before', 'N/A')}")
                         
                         # Show monthly distribution
-                        monthly_data = historical_arrival_patterns.get('monthly_distribution', {})
+                        monthly_data = st.session_state.historical_arrival_patterns.get('monthly_distribution', {})
                         if monthly_data:
                             months = list(monthly_data.keys())
                             values = list(monthly_data.values())
@@ -380,21 +425,36 @@ def display_upload_page():
                             fig.update_layout(xaxis={'categoryorder':'array', 'categoryarray':['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']})
                             st.plotly_chart(fig, use_container_width=True)
                     
-                    if historical_mos_distribution:
-                        st.write("### Historical MOS Distribution")
-                        mos_data = []
-                        for mos, percentage in historical_mos_distribution.items():
-                            mos_data.append({"MOS": mos, "Percentage": percentage * 100})
-                        
-                        fig = px.pie(
-                            mos_data,
-                            values="Percentage",
-                            names="MOS",
-                            title="Historical MOS Distribution",
-                            color_discrete_sequence=px.colors.qualitative.Bold
-                        )
-                        fig.update_traces(textposition='inside', textinfo='percent+label')
-                        st.plotly_chart(fig, use_container_width=True)
+                    # Display MOS distribution with additional safety checks
+                    if 'historical_mos_distribution' in st.session_state and st.session_state.historical_mos_distribution:
+                        try:
+                            st.write("### Historical MOS Distribution")
+                            mos_data = []
+                            
+                            # Get distribution and ensure it only contains the standard MOS keys
+                            mos_distribution = st.session_state.historical_mos_distribution
+                            standard_mos = ['18A', '18B', '18C', '18D', '18E']
+                            
+                            for mos in standard_mos:
+                                if mos in mos_distribution and isinstance(mos_distribution[mos], (int, float)):
+                                    mos_data.append({"MOS": mos, "Percentage": float(mos_distribution[mos]) * 100})
+                            
+                            # Create visualization only if we have data
+                            if mos_data:
+                                fig = px.pie(
+                                    mos_data,
+                                    values="Percentage",
+                                    names="MOS",
+                                    title="Historical MOS Distribution",
+                                    color_discrete_sequence=px.colors.qualitative.Bold
+                                )
+                                fig.update_traces(textposition='inside', textinfo='percent+label')
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.info("No valid MOS distribution data available.")
+                        except Exception as e:
+                            st.error(f"Error displaying MOS distribution: {e}")
+                            st.info("Unable to display MOS distribution chart.")
                 
                 st.success("✅ Data successfully loaded and processed!")
                 
