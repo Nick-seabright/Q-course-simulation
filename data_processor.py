@@ -807,7 +807,7 @@ def extract_current_students_from_history(processed_data, cutoff_date=None):
     
     return current_students
 
-def analyze_career_paths(processed_data, min_students=3):
+def analyze_career_paths(processed_data, min_students=3, core_threshold=0.3, variability_threshold=3.0, flexible_threshold=0.1):
     """
     Analyze historical data to identify typical career paths
     Works with or without MOS information in the dataset.
@@ -815,11 +815,25 @@ def analyze_career_paths(processed_data, min_students=3):
     Args:
         processed_data (pd.DataFrame): Processed training data
         min_students (int): Minimum number of students required to consider a path valid
+        core_threshold (float): Minimum percentage of students who must take a course for it to be core (0.1-1.0)
+        variability_threshold (float): Maximum position variability for a course to be considered core
+        flexible_threshold (float): Minimum percentage for flexible courses
         
     Returns:
         dict: Dictionary with career paths and flexible courses
     """
     import copy
+    
+    # Add debug information
+    print(f"Processing dataset with {len(processed_data)} records")
+    print(f"Parameters: min_students={min_students}, core_threshold={core_threshold}, variability_threshold={variability_threshold}")
+    
+    # Print available columns for debugging
+    print(f"Available columns: {processed_data.columns.tolist()}")
+    
+    # Check if graduation data is available
+    has_graduation_data = 'Graduated' in processed_data.columns or 'Out Stat' in processed_data.columns
+    print(f"Graduation data available: {has_graduation_data}")
     
     # Check if MOS information is available
     has_mos_data = ('TrainingMOS' in processed_data.columns and 
@@ -834,6 +848,11 @@ def analyze_career_paths(processed_data, min_students=3):
     
     print(f"Analyzing {total_students} student records...")
     
+    # Count all unique courses in the dataset for reference
+    all_unique_courses = processed_data['Course Title'].unique()
+    print(f"Total unique courses in dataset: {len(all_unique_courses)}")
+    print(f"Course list: {all_unique_courses.tolist()}")
+    
     # Track data by MOS and general
     all_mos_paths = defaultdict(list)
     all_courses = set()
@@ -844,34 +863,63 @@ def analyze_career_paths(processed_data, min_students=3):
     # Add a general category
     student_counts["General"] = 0
     
+    # Track additional metrics for debugging
+    total_processed = 0
+    skipped_no_graduation = 0
+    skipped_too_few_courses = 0
+    
     # Process each student
     for i, (ssn, student_data) in enumerate(student_groups):
-        if i % 1000 == 0:
-            print(f"Processing student {i}/{total_students}...")
+        if i % 1000 == 0 or i == total_students - 1:
+            print(f"Processing student {i+1}/{total_students}...")
             
         # Check if the student has graduation data
-        has_graduation_data = False
-        if 'Graduated' in student_data.columns:
-            has_graduation_data = any(student_data['Graduated'])
-        elif 'Out Stat' in student_data.columns:
-            has_graduation_data = any(student_data['Out Stat'] == 'G')
+        has_graduation_data_student = False
         
-        # Skip students with no graduation records
-        if not has_graduation_data and ('Graduated' in student_data.columns or 'Out Stat' in student_data.columns):
+        # For debugging, show some sample student data
+        if i < 3:  # Show data for first 3 students
+            print(f"\nSample student {i+1} data:")
+            if 'Graduated' in student_data.columns:
+                print(f"  Graduated records: {student_data['Graduated'].sum()}/{len(student_data)}")
+            if 'Out Stat' in student_data.columns:
+                print(f"  Out Stat values: {student_data['Out Stat'].value_counts().to_dict()}")
+            print(f"  Total courses: {len(student_data)}")
+        
+        if 'Graduated' in student_data.columns:
+            has_graduation_data_student = any(student_data['Graduated'])
+        elif 'Out Stat' in student_data.columns:
+            has_graduation_data_student = any(student_data['Out Stat'] == 'G')
+        
+        # For more relaxed criteria, assume graduation if no explicit data
+        if not has_graduation_data:
+            has_graduation_data_student = True
+        
+        # Skip students with no graduation records if we have graduation data
+        if not has_graduation_data_student and has_graduation_data:
+            skipped_no_graduation += 1
             continue
             
         # Get completed courses in chronological order
         try:
             if 'Graduated' in student_data.columns:
+                # Use only graduated courses if we have that data
                 completed_courses = student_data[student_data['Graduated']].sort_values('Cls Start Date')
             elif 'Out Stat' in student_data.columns:
+                # Use courses with "G" output status
                 completed_courses = student_data[student_data['Out Stat'] == 'G'].sort_values('Cls Start Date')
             else:
                 # No graduation info, use all courses
                 completed_courses = student_data.sort_values('Cls Start Date')
             
+            # Print sample of completed courses for debugging
+            if i < 3:
+                print(f"  Completed courses: {len(completed_courses)}")
+                if not completed_courses.empty:
+                    print(f"  First few courses: {completed_courses['Course Title'].head(3).tolist()}")
+            
             # Skip if too few courses
             if len(completed_courses) < 2:
+                skipped_too_few_courses += 1
                 continue
                 
             # Extract the sequence of courses
@@ -880,6 +928,9 @@ def analyze_career_paths(processed_data, min_students=3):
             # Skip if no courses found
             if not course_sequence:
                 continue
+            
+            # Count this student as processed
+            total_processed += 1
             
             # Add to the all courses set
             all_courses.update(course_sequence)
@@ -910,6 +961,13 @@ def analyze_career_paths(processed_data, min_students=3):
             print(f"Error processing student {ssn}: {e}")
             continue
     
+    # Print summary of processed data
+    print(f"\nProcessing summary:")
+    print(f"  Total students: {total_students}")
+    print(f"  Successfully processed: {total_processed}")
+    print(f"  Skipped (no graduation): {skipped_no_graduation}")
+    print(f"  Skipped (too few courses): {skipped_too_few_courses}")
+    
     # Process data into career paths
     career_paths = {}
     
@@ -920,7 +978,19 @@ def analyze_career_paths(processed_data, min_students=3):
             print(f"Skipping {mos}: only {len(paths)} students (minimum {min_students})")
             continue
             
-        print(f"Processing {mos}: {len(paths)} students")
+        print(f"\nProcessing {mos}: {len(paths)} students")
+        
+        # Count courses for this MOS/track
+        course_counts = {}
+        for course, count in course_frequencies[mos].items():
+            course_counts[course] = count
+            
+        # Display top courses for this MOS/track
+        sorted_courses = sorted(course_counts.items(), key=lambda x: x[1], reverse=True)
+        print(f"Most common courses for {mos}:")
+        for course, count in sorted_courses[:10]:  # Show top 10
+            percentage = count / len(paths) * 100
+            print(f"  {course}: {count} students ({percentage:.1f}%)")
             
         # Calculate percentage of students who took each course
         course_percentages = {}
@@ -936,18 +1006,10 @@ def analyze_career_paths(processed_data, min_students=3):
             # Calculate standard deviation of positions
             std_dev = np.std(positions) if len(positions) > 1 else 0
             position_variability[course] = std_dev
-        
-        # Set thresholds based on data availability
-        if len(paths) >= 50:
-            # With lots of data, we can be more selective
-            core_threshold = 0.7 if mos != "General" else 0.4
-            variability_threshold = 1.5
-            flexible_threshold = 0.3 if mos != "General" else 0.2
-        else:
-            # With limited data, use more relaxed thresholds
-            core_threshold = 0.6 if mos != "General" else 0.3
-            variability_threshold = 2.0
-            flexible_threshold = 0.2 if mos != "General" else 0.15
+            
+            # Display position statistics for top courses
+            if course in [c for c, _ in sorted_courses[:10]]:
+                print(f"  {course} - Avg Position: {avg_positions[course]:.1f}, Variability: {std_dev:.1f}")
         
         # Identify core courses (taken by most students in consistent order)
         core_courses = []
@@ -957,9 +1019,14 @@ def analyze_career_paths(processed_data, min_students=3):
             # Core courses are taken by many students and have low position variability
             if percentage >= core_threshold and position_variability[course] < variability_threshold:
                 core_courses.append((course, avg_positions[course]))
+                print(f"  CORE: {course} - {percentage*100:.1f}%, Var: {position_variability[course]:.1f}")
             # Flexible courses are taken by some students but have higher position variability
             elif percentage >= flexible_threshold:
                 flexible_courses.append(course)
+                print(f"  FLEXIBLE: {course} - {percentage*100:.1f}%, Var: {position_variability[course]:.1f}")
+        
+        # Print core course count
+        print(f"  Found {len(core_courses)} core courses and {len(flexible_courses)} flexible courses")
         
         # Sort core courses by average position to create the typical path
         core_courses.sort(key=lambda x: x[1])
@@ -999,77 +1066,68 @@ def analyze_career_paths(processed_data, min_students=3):
             'position_variability': position_variability,
             'all_paths': paths
         }
+        
+        # Print the final path
+        print(f"Final path for {mos}: {' -> '.join(typical_path)}")
     
-    # If we have enough data but no MOS-specific paths, try to identify tracks
-    if not has_mos_data and "General" in career_paths and career_paths["General"]["student_count"] >= 50:
+    # Try clustering to identify tracks if we have a general path but not much else
+    if "General" in career_paths and len(career_paths) <= 2 and len(career_paths["General"]["all_paths"]) >= 30:
         try:
-            print("Attempting to identify distinct tracks from general data...")
+            print("\nAttempting to identify distinct tracks from data...")
             
-            # Try clustering to find distinct tracks
+            # Extract sample path sequences for analysis
+            sample_paths = []
+            print("Sample student paths:")
+            for i, path in enumerate(career_paths["General"]["all_paths"][:5]):
+                print(f"Student {i+1}: {' -> '.join(path)}")
+                if len(path) >= 3:
+                    sample_paths.append(path)
+            
+            # Get all courses that appear in at least 10% of paths
+            common_courses = []
+            for course, count in course_frequencies["General"].items():
+                if count >= 0.1 * len(career_paths["General"]["all_paths"]):
+                    common_courses.append(course)
+            
+            print(f"Found {len(common_courses)} common courses for clustering")
+            
+            # Create a feature matrix for clustering
             general_paths = career_paths["General"]["all_paths"]
-            all_courses_list = list(all_courses)
             
             # Create a matrix of course presence (1 if student took course, 0 otherwise)
-            course_matrix = np.zeros((len(general_paths), len(all_courses_list)))
+            course_matrix = np.zeros((len(general_paths), len(common_courses)))
             for i, path in enumerate(general_paths):
-                for course in path:
-                    if course in all_courses_list:
-                        j = all_courses_list.index(course)
+                for j, course in enumerate(common_courses):
+                    if course in path:
                         course_matrix[i, j] = 1
-            
-            # If there are many courses, try to reduce dimensionality
-            if len(all_courses_list) > 100:
-                # Filter to courses taken by at least 5% of students
-                course_counts = np.sum(course_matrix, axis=0)
-                frequent_courses = course_counts >= len(general_paths) * 0.05
-                course_matrix = course_matrix[:, frequent_courses]
-                filtered_courses = [all_courses_list[i] for i in range(len(all_courses_list)) if frequent_courses[i]]
-                all_courses_list = filtered_courses
             
             # Import here to avoid dependency if not needed
             from sklearn.cluster import KMeans
             
-            # Try different numbers of clusters
-            best_silhouette = -1
-            best_clusters = None
-            best_n_clusters = 0
-            
-            try:
-                from sklearn.metrics import silhouette_score
+            # Use 2-4 clusters
+            for n_clusters in range(2, 5):
+                print(f"Trying {n_clusters} clusters...")
+                kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                cluster_labels = kmeans.fit_predict(course_matrix)
                 
-                for n_clusters in range(2, min(6, len(general_paths) // min_students)):
-                    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-                    cluster_labels = kmeans.fit_predict(course_matrix)
-                    
-                    # Calculate silhouette score
-                    silhouette_avg = silhouette_score(course_matrix, cluster_labels)
-                    print(f"For n_clusters = {n_clusters}, silhouette score is {silhouette_avg}")
-                    
-                    if silhouette_avg > best_silhouette:
-                        best_silhouette = silhouette_avg
-                        best_clusters = cluster_labels
-                        best_n_clusters = n_clusters
-            except Exception as e:
-                print(f"Error in silhouette analysis: {e}")
-                # Fallback to 3 clusters
-                kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
-                best_clusters = kmeans.fit_predict(course_matrix)
-                best_n_clusters = 3
-            
-            # If we found reasonable clusters
-            if best_clusters is not None:
-                print(f"Found {best_n_clusters} distinct tracks in the data")
+                # Count students in each cluster
+                cluster_counts = {}
+                for label in range(n_clusters):
+                    count = np.sum(cluster_labels == label)
+                    cluster_counts[label] = count
+                    print(f"  Cluster {label+1}: {count} students")
                 
-                # Process each cluster into a track
-                for cluster_id in range(best_n_clusters):
+                # Analyze each cluster
+                for cluster_id in range(n_clusters):
                     # Get paths in this cluster
-                    cluster_paths = [general_paths[i] for i in range(len(general_paths)) if best_clusters[i] == cluster_id]
+                    cluster_paths = [general_paths[i] for i in range(len(general_paths)) if cluster_labels[i] == cluster_id]
                     
                     # Skip if too few paths
                     if len(cluster_paths) < min_students:
+                        print(f"  Skipping cluster {cluster_id+1}: too few students")
                         continue
                     
-                    # Calculate frequencies and positions for this cluster
+                    # Calculate course frequencies for this cluster
                     cluster_frequencies = defaultdict(int)
                     cluster_positions = defaultdict(list)
                     
@@ -1078,48 +1136,64 @@ def analyze_career_paths(processed_data, min_students=3):
                             cluster_frequencies[course] += 1
                             cluster_positions[course].append(i)
                     
-                    # Calculate course percentages
+                    # Find most distinctive courses in this cluster
                     cluster_percentages = {course: count/len(cluster_paths) 
                                           for course, count in cluster_frequencies.items()}
                     
-                    # Calculate average positions
-                    cluster_avg_positions = {course: sum(positions)/len(positions) 
-                                           for course, positions in cluster_positions.items()}
+                    # Compare to general percentages
+                    general_percentages = career_paths["General"]["course_percentages"]
+                    distinctive_courses = []
                     
-                    # Calculate position variability
-                    cluster_variability = {course: np.std(positions) if len(positions) > 1 else 0 
+                    print(f"  Distinctive courses for Cluster {cluster_id+1}:")
+                    for course, percentage in cluster_percentages.items():
+                        general_pct = general_percentages.get(course, 0)
+                        # Calculate ratio to determine distinctiveness
+                        ratio = percentage / general_pct if general_pct > 0 else float('inf')
+                        
+                        # Courses much more common in this cluster than overall
+                        if percentage > 0.4 and ratio > 1.3:
+                            distinctiveness = percentage * ratio
+                            distinctive_courses.append((course, distinctiveness))
+                            print(f"    {course}: {percentage*100:.1f}% (vs {general_pct*100:.1f}% overall)")
+                    
+                    # Sort by distinctiveness
+                    distinctive_courses.sort(key=lambda x: x[1], reverse=True)
+                    
+                    # Extract top distinctive courses
+                    top_distinctive = [course for course, _ in distinctive_courses[:3]]
+                    
+                    # Calculate average positions and variability
+                    avg_positions = {course: sum(positions)/len(positions) 
+                                   for course, positions in cluster_positions.items()}
+                    position_variability = {course: np.std(positions) if len(positions) > 1 else 0 
                                          for course, positions in cluster_positions.items()}
                     
-                    # Identify core courses for this cluster (more selective criteria)
+                    # Identify core courses with relaxed thresholds
+                    core_threshold_cluster = 0.4  # 40% of students in this cluster
+                    variability_threshold_cluster = 2.0  # Higher than main threshold
+                    
                     cluster_core = []
                     for course, percentage in cluster_percentages.items():
-                        if percentage >= 0.6 and cluster_variability[course] < 1.5:
-                            cluster_core.append((course, cluster_avg_positions[course]))
+                        if percentage >= core_threshold_cluster:
+                            # For core path selection, prioritize distinctive courses even if more variable
+                            if course in top_distinctive:
+                                cluster_core.append((course, avg_positions[course]))
+                            elif position_variability.get(course, float('inf')) < variability_threshold_cluster:
+                                cluster_core.append((course, avg_positions[course]))
                     
                     # Sort by position
                     cluster_core.sort(key=lambda x: x[1])
                     cluster_path = [course for course, _ in cluster_core]
                     
+                    print(f"  Core path for Cluster {cluster_id+1}: {' -> '.join(cluster_path)}")
+                    
                     # Only add if we found a meaningful path
-                    if len(cluster_path) >= 3:
-                        # Find the most distinctive courses for this cluster
-                        general_percentages = career_paths["General"]["course_percentages"]
-                        
-                        distinctive_courses = []
-                        for course, percentage in cluster_percentages.items():
-                            general_pct = general_percentages.get(course, 0)
-                            # Courses much more common in this cluster than overall
-                            if percentage > general_pct * 1.5 and percentage >= 0.5:
-                                distinctive_courses.append((course, percentage/general_pct))
-                        
-                        # Sort by distinctiveness
-                        distinctive_courses.sort(key=lambda x: x[1], reverse=True)
-                        
+                    if len(cluster_path) >= 2:
                         # Create a name for the track
                         track_name = f"Track {cluster_id+1}"
-                        if distinctive_courses:
+                        if top_distinctive:
                             # Use most distinctive course for the name
-                            track_name = f"Track: {distinctive_courses[0][0]}"
+                            track_name = f"Track: {top_distinctive[0]}"
                         
                         # Add to career paths
                         career_paths[track_name] = {
@@ -1127,13 +1201,163 @@ def analyze_career_paths(processed_data, min_students=3):
                             'flexible_courses': [c for c, _ in distinctive_courses if c not in cluster_path],
                             'course_percentages': cluster_percentages,
                             'student_count': len(cluster_paths),
-                            'avg_positions': cluster_avg_positions,
-                            'position_variability': cluster_variability,
-                            'all_paths': cluster_paths
+                            'avg_positions': avg_positions,
+                            'position_variability': position_variability,
+                            'all_paths': cluster_paths[:100]  # Limit to 100 paths to save memory
                         }
                 
         except Exception as e:
             print(f"Error in track identification: {e}")
+            import traceback
+            print(traceback.format_exc())
+    
+    # If we still don't have enough paths, try an alternate approach to find sequences
+    if len(career_paths) <= 1 and "General" in career_paths and len(career_paths["General"]["typical_path"]) <= 2:
+        print("\nUsing alternate approach to find course sequences...")
+        
+        try:
+            # Find most common course pairs (courses that are frequently taken in sequence)
+            course_pairs = defaultdict(int)
+            course_pair_order = defaultdict(list)
+            
+            # Count how often courses appear in sequence
+            for path in all_mos_paths["General"]:
+                for i in range(len(path)-1):
+                    for j in range(i+1, len(path)):
+                        course1 = path[i]
+                        course2 = path[j]
+                        pair = (course1, course2)
+                        course_pairs[pair] += 1
+                        # Record the position difference
+                        course_pair_order[pair].append(j-i)
+            
+            # Calculate frequency and consistency of course pairs
+            pair_metrics = []
+            for pair, count in course_pairs.items():
+                if count >= min_students:
+                    course1, course2 = pair
+                    frequency = count / len(all_mos_paths["General"])
+                    avg_order_diff = np.mean(course_pair_order[pair])
+                    order_consistency = 1.0 / (np.std(course_pair_order[pair]) + 1.0)  # Higher for more consistent pairs
+                    
+                    pair_metrics.append({
+                        'course1': course1,
+                        'course2': course2,
+                        'count': count,
+                        'frequency': frequency,
+                        'avg_order_diff': avg_order_diff,
+                        'order_consistency': order_consistency,
+                        'score': frequency * order_consistency  # Higher score for frequent AND consistent pairs
+                    })
+            
+            # Sort by score
+            pair_metrics.sort(key=lambda x: x['score'], reverse=True)
+            
+            # Print top pairs
+            print("Top course pairs:")
+            for i, pair in enumerate(pair_metrics[:20]):
+                print(f"  {pair['course1']} -> {pair['course2']}: {pair['count']} students, "
+                      f"freq: {pair['frequency']:.2f}, consistency: {pair['order_consistency']:.2f}, "
+                      f"avg gap: {pair['avg_order_diff']:.1f} positions")
+            
+            # Build course chains using the top pairs
+            visited_pairs = set()
+            chains = []
+            
+            # Start with the top pairs
+            for pair_info in pair_metrics[:20]:  # Consider top 20 pairs
+                course1, course2 = pair_info['course1'], pair_info['course2']
+                
+                if (course1, course2) in visited_pairs:
+                    continue
+                    
+                # Start a new chain
+                current_chain = [course1, course2]
+                visited_pairs.add((course1, course2))
+                
+                # Try to extend the chain forward
+                changed = True
+                while changed:
+                    changed = False
+                    for next_pair_info in pair_metrics:
+                        next_c1, next_c2 = next_pair_info['course1'], next_pair_info['course2']
+                        
+                        # If the first course in the pair matches our last course, extend the chain
+                        if next_c1 == current_chain[-1] and next_c2 not in current_chain:
+                            current_chain.append(next_c2)
+                            visited_pairs.add((next_c1, next_c2))
+                            changed = True
+                            break
+                
+                # Try to extend the chain backward
+                changed = True
+                while changed:
+                    changed = False
+                    for prev_pair_info in pair_metrics:
+                        prev_c1, prev_c2 = prev_pair_info['course1'], prev_pair_info['course2']
+                        
+                        # If the second course in the pair matches our first course, prepend to the chain
+                        if prev_c2 == current_chain[0] and prev_c1 not in current_chain:
+                            current_chain.insert(0, prev_c1)
+                            visited_pairs.add((prev_c1, prev_c2))
+                            changed = True
+                            break
+                
+                # Only keep chains with at least 3 courses
+                if len(current_chain) >= 3:
+                    chains.append(current_chain)
+            
+            # Print the identified chains
+            print("\nIdentified course chains:")
+            for i, chain in enumerate(chains):
+                print(f"Chain {i+1}: {' -> '.join(chain)}")
+                
+                # Add each chain as a separate track
+                if len(chain) >= 3:
+                    track_name = f"Sequence: {chain[0]}"
+                    
+                    # Count students who took at least half of these courses in order
+                    matching_paths = []
+                    for path in all_mos_paths["General"]:
+                        # Check if at least half of the chain appears in this path in the same order
+                        matches = 0
+                        last_idx = -1
+                        for course in chain:
+                            if course in path:
+                                idx = path.index(course)
+                                if idx > last_idx:  # Courses appear in correct order
+                                    matches += 1
+                                    last_idx = idx
+                        
+                        if matches >= len(chain) / 2:
+                            matching_paths.append(path)
+                    
+                    # Only add if enough students match this pattern
+                    if len(matching_paths) >= min_students:
+                        # Calculate course percentages for this chain
+                        chain_freqs = defaultdict(int)
+                        for path in matching_paths:
+                            for course in path:
+                                chain_freqs[course] += 1
+                        
+                        chain_percentages = {course: count/len(matching_paths) 
+                                           for course, count in chain_freqs.items()}
+                        
+                        # Add as a new track
+                        career_paths[track_name] = {
+                            'typical_path': chain,
+                            'flexible_courses': [],  # No flexible courses for chain-based tracks
+                            'course_percentages': chain_percentages,
+                            'student_count': len(matching_paths),
+                            'avg_positions': {},  # Not calculated for chains
+                            'position_variability': {},  # Not calculated for chains
+                            'all_paths': matching_paths[:100]  # Limit to 100 paths to save memory
+                        }
+                        
+                        print(f"  Added as track with {len(matching_paths)} matching students")
+            
+        except Exception as e:
+            print(f"Error in sequence identification: {e}")
             import traceback
             print(traceback.format_exc())
     

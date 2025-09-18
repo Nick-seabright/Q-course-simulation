@@ -763,8 +763,8 @@ def display_config_page():
         min_students = st.number_input(
             "Minimum Students for Valid Path",
             min_value=1,
-            max_value=20,
-            value=3,
+            max_value=100,
+            value=10,
             help="Require at least this many students to have followed a path for it to be considered valid"
         )
     
@@ -774,14 +774,20 @@ def display_config_page():
         else:
             with st.spinner("Analyzing historical data to identify career paths..."):
                 try:
-                    # Analyze career paths from historical data
-                    career_paths = analyze_career_paths(st.session_state.processed_data, min_students)
+                    # Use more relaxed thresholds to find paths
+                    career_paths = analyze_career_paths(
+                        st.session_state.processed_data, 
+                        min_students=3, 
+                        core_threshold=0.3,        # Only 30% of students need to take a course
+                        variability_threshold=3.0, # Higher tolerance for position variability
+                        flexible_threshold=0.1     # Only 10% for flexible courses
+                    )
                     
                     # Store in session state
                     st.session_state.career_paths = career_paths
                     
                     if career_paths:
-                        st.success(f"Successfully analyzed career paths for {len(career_paths)} MOS!")
+                        st.success(f"Successfully analyzed career paths for {len(career_paths)} tracks!")
                     else:
                         st.warning("No clear career paths found in the historical data. Try reducing the minimum students requirement.")
                 except Exception as e:
