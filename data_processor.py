@@ -820,10 +820,13 @@ def analyze_career_paths(processed_data, min_students=3):
     """
     import copy
     
+    # Check if MOS information is available
+    has_mos_data = 'TrainingMOS' in processed_data.columns and not processed_data['TrainingMOS'].isna().all()
+    
     # Group data by student
     student_groups = processed_data.groupby('SSN')
     
-    # Store career paths by MOS
+    # Store career paths by MOS (or "General" if no MOS data)
     mos_paths = defaultdict(list)
     course_frequencies = defaultdict(lambda: defaultdict(int))
     course_positions = defaultdict(lambda: defaultdict(list))
@@ -837,12 +840,13 @@ def analyze_career_paths(processed_data, min_students=3):
         if not any(student_data['Graduated']):
             continue
             
-        # Get the student's MOS
-        if 'TrainingMOS' in student_data.columns:
+        # Get the student's MOS if available, otherwise use "General"
+        if has_mos_data:
             mos = student_data['TrainingMOS'].iloc[0]
+            if pd.isna(mos) or not mos:  # If MOS is empty for this student
+                mos = "General"
         else:
-            # Skip if MOS is unknown
-            continue
+            mos = "General"
             
         # Count this student for their MOS
         mos_student_count[mos] += 1
