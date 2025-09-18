@@ -209,6 +209,157 @@ def display_upload_page():
     else:
         st.info("Please upload a CSV file with the training data.")
 
+def visualize_prerequisites(course_configs):
+    """
+    Create a network visualization of course prerequisite relationships
+    Args:
+        course_configs (dict): Dictionary of course configurations
+    Returns:
+        go.Figure: Plotly figure with the network visualization
+    """
+    try:
+        import networkx as nx
+        
+        # Create a directed graph
+        G = nx.DiGraph()
+        
+        # Add nodes (courses)
+        for course in course_configs:
+            G.add_node(course)
+        
+        # Add edges (prerequisites)
+        for course, config in course_configs.items():
+            # AND prerequisites
+            if 'prerequisites' in config:
+                prereqs = []
+                if isinstance(config['prerequisites'], list):
+                    prereqs = config['prerequisites']
+                elif isinstance(config['prerequisites'], dict):
+                    prereqs = config['prerequisites'].get('courses', [])
+                
+                for prereq in prereqs:
+                    if prereq in course_configs:  # Only add if both are in the configs
+                        G.add_edge(prereq, course, type='AND')
+            
+            # OR prerequisites
+            if 'or_prerequisites' in config:
+                for i, or_group in enumerate(config['or_prerequisites']):
+                    # Create a virtual node for the OR group
+                    or_node = f"OR_{course}_{i}"
+                    G.add_node(or_node, is_virtual=True)
+                    G.add_edge(or_node, course, type='OR')
+                    
+                    for prereq in or_group:
+                        if prereq in course_configs:  # Only add if both are in the configs
+                            G.add_edge(prereq, or_node, type='OR_member')
+        
+        # Use a layout that shows the hierarchy
+        pos = nx.spring_layout(G, k=0.3, iterations=50)
+        
+        # Prepare the visualization
+        edge_trace = []
+        node_trace = []
+        
+        # Add edges
+        for edge in G.edges(data=True):
+            x0, y0 = pos[edge[0]]
+            x1, y1 = pos[edge[1]]
+            
+            edge_type = edge[2].get('type', 'default')
+            
+            # Use different styles for different edge types
+            if edge_type == 'AND':
+                line_color = 'rgba(66, 133, 244, 0.8)'  # Blue for AND
+                line_width = 2
+                line_dash = 'solid'
+            elif edge_type == 'OR':
+                line_color = 'rgba(219, 68, 55, 0.8)'  # Red for OR
+                line_width = 2
+                line_dash = 'dash'
+            else:  # OR_member
+                line_color = 'rgba(219, 68, 55, 0.5)'  # Light red for OR members
+                line_width = 1
+                line_dash = 'dot'
+            
+            edge_trace.append(
+                go.Scatter(
+                    x=[x0, x1, None],
+                    y=[y0, y1, None],
+                    line=dict(width=line_width, color=line_color, dash=line_dash),
+                    hoverinfo='none',
+                    mode='lines'
+                )
+            )
+        
+        # Add nodes
+        node_x = []
+        node_y = []
+        node_text = []
+        node_color = []
+        node_size = []
+        
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            
+            # Check if it's a virtual node
+            is_virtual = G.nodes[node].get('is_virtual', False)
+            
+            if is_virtual:
+                # Format for OR group nodes
+                node_text.append("OR")
+                node_color.append('rgba(219, 68, 55, 0.7)')  # Red for OR nodes
+                node_size.append(10)  # Smaller size for virtual nodes
+            else:
+                # Regular course nodes
+                node_text.append(node)
+                node_color.append('rgba(66, 133, 244, 0.7)')  # Blue for regular nodes
+                node_size.append(20)
+        
+        # Create node trace
+        node_trace = go.Scatter(
+            x=node_x,
+            y=node_y,
+            text=node_text,
+            mode='markers+text',
+            hoverinfo='text',
+            marker=dict(
+                color=node_color,
+                size=node_size,
+                line=dict(width=2, color='rgba(50, 50, 50, 0.8)')
+            ),
+            textposition="top center"
+        )
+        
+        # Create the figure
+        fig = go.Figure(data=edge_trace + [node_trace])
+        
+        # Update layout
+        fig.update_layout(
+            title='Course Prerequisite Relationships',
+            titlefont_size=16,
+            showlegend=False,
+            hovermode='closest',
+            margin=dict(b=20, l=5, r=5, t=40),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=600,
+            width=800
+        )
+        
+        return fig
+    except Exception as e:
+        print(f"Error creating prerequisite visualization: {e}")
+        # Return a simple error figure
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"Error creating visualization: {str(e)}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False
+        )
+        return fig
+
 def display_config_page():
     st.header("Course Configuration")
     if 'processed_data' not in st.session_state or st.session_state.processed_data is None:
@@ -600,6 +751,112 @@ def display_config_page():
             st.metric("Avg. Duration", f"{hist_data.get('avg_duration', 0):.1f} days")
         with metrics_col3:
             st.metric("Recycle Rate", f"{hist_data.get('recycle_rate', 0):.1%}")
+
+    # Prerequisite Inference feature
+    st.subheader("Prerequisite Inference")
+    st.write("Analyze historical data to infer likely prerequisites for courses.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        infer_button = st.button("Infer Prerequisites from Historical Data", key="infer_prereqs")
+    with col2:
+        confidence_threshold = st.slider(
+            "Confidence Threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.7,
+            help="Only apply inferred prerequisites with confidence above this threshold"
+        )
+    
+    if infer_button:
+        if 'processed_data' not in st.session_state or st.session_state.processed_data is None:
+            st.warning("Please upload and process data first to infer prerequisites.")
+        else:
+            with st.spinner("Analyzing historical data to infer prerequisites..."):
+                try:
+                    # Infer prerequisites from historical data
+                    inferred_data = infer_prerequisites(st.session_state.processed_data)
+                    
+                    # Store in session state
+                    st.session_state.inferred_prerequisites = inferred_data
+                    
+                    # Apply inferred prerequisites to configurations
+                    updated_configs, changes = apply_inferred_prerequisites(
+                        st.session_state.course_configs,
+                        inferred_data,
+                        confidence_threshold
+                    )
+                    
+                    # Show changes
+                    if changes:
+                        st.success(f"Found {len(changes)} courses with inferred prerequisites!")
+                        
+                        with st.expander("View Inferred Prerequisites", expanded=True):
+                            for change in changes:
+                                st.write(f"**{change['course']}** (Confidence: {change['confidence']:.2f})")
+                                
+                                if change['added_prerequisites']:
+                                    st.write("Added required prerequisites:")
+                                    for prereq in change['added_prerequisites']:
+                                        st.write(f"- {prereq}")
+                                
+                                if change['added_or_groups']:
+                                    st.write("Added alternative prerequisites (OR groups):")
+                                    for i, group in enumerate(change['added_or_groups']):
+                                        st.write(f"- Group {i+1}: {' OR '.join(group)}")
+                                
+                                st.write("---")
+                        
+                        # Option to apply changes
+                        if st.button("Apply Inferred Prerequisites"):
+                            st.session_state.course_configs = updated_configs
+                            st.success("Applied inferred prerequisites to course configurations!")
+                            st.rerun()
+                    else:
+                        st.info("No new prerequisites inferred with the current confidence threshold. Try lowering the threshold or adding more historical data.")
+                    
+                    # Option to view detailed analysis
+                    with st.expander("View Detailed Prerequisite Analysis", expanded=False):
+                        for course, prereq_data in inferred_data['prerequisites'].items():
+                            if 'analysis' in prereq_data:
+                                st.write(f"### {course}")
+                                st.write(f"Confidence: {inferred_data['confidence'].get(course, 0):.2f}")
+                                
+                                # Create a dataframe for the analysis
+                                analysis_df = pd.DataFrame(prereq_data['analysis'])
+                                analysis_df['frequency'] = analysis_df['frequency'].apply(lambda x: f"{x:.1%}")
+                                
+                                st.dataframe(analysis_df)
+                                st.write("---")
+                
+                except Exception as e:
+                    st.error(f"Error inferring prerequisites: {e}")
+
+    # Visualize prerequisite relationships
+    st.subheader("Prerequisite Relationship Visualization")
+    st.write("Visualize how courses are connected through prerequisites.")
+    
+    if st.button("Show Prerequisite Relationships"):
+        try:
+            # Make sure networkx is installed
+            import networkx as nx
+            
+            # Create the visualization
+            fig = visualize_prerequisites(st.session_state.course_configs)
+            
+            # Display the figure
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Add a note about the visualization
+            st.info("""
+            **How to read this diagram:**
+            - Blue nodes are courses
+            - Blue solid lines indicate required prerequisites (AND)
+            - Red dashed lines indicate alternative prerequisites (OR)
+            - Drag nodes to rearrange the visualization
+            """)
+        except ImportError:
+            st.error("NetworkX library is required for visualization. Install it with: pip install networkx")
     
     # Save configuration button
     if st.button("Save Configuration"):

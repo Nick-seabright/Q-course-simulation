@@ -805,3 +805,206 @@ def extract_current_students_from_history(processed_data, cutoff_date=None):
             student_id += 1
     
     return current_students
+
+def infer_prerequisites(processed_data):
+    """
+    Infer potential prerequisites based on historical student progression
+    Args:
+        processed_data (pd.DataFrame): Processed training data
+    Returns:
+        dict: Dictionary of likely prerequisites for each course
+    """
+    # Group data by student (SSN)
+    student_groups = processed_data.groupby('SSN')
+    
+    # Track course sequences and statistics
+    course_sequences = {}
+    total_students_by_course = defaultdict(int)
+    
+    for ssn, student_data in student_groups:
+        # Only consider graduated courses
+        completed_courses = student_data[student_data['Graduated']].sort_values('Cls Start Date')
+        
+        # Skip if student completed fewer than 2 courses
+        if len(completed_courses) < 2:
+            continue
+        
+        # Get course sequence
+        course_sequence = completed_courses['Course Title'].tolist()
+        
+        # Count total students for each course
+        for course in course_sequence:
+            total_students_by_course[course] += 1
+        
+        # Update course sequences
+        for i in range(1, len(course_sequence)):
+            current_course = course_sequence[i]
+            if current_course not in course_sequences:
+                course_sequences[current_course] = {}
+            
+            # Count all previous courses as potential prerequisites
+            for j in range(i):
+                prev_course = course_sequence[j]
+                if prev_course not in course_sequences[current_course]:
+                    course_sequences[current_course][prev_course] = 0
+                course_sequences[current_course][prev_course] += 1
+    
+    # Calculate likelihood of prerequisites and identify patterns
+    prerequisites = {}
+    prerequisite_confidence = {}
+    
+    for course, potential_prereqs in course_sequences.items():
+        # Skip if no data for this course
+        if not potential_prereqs:
+            continue
+            
+        # Total number of students who took this course
+        total_students = total_students_by_course[course]
+        
+        # Skip if too few students (not enough data)
+        if total_students < 3:
+            continue
+        
+        # Analyze each potential prerequisite
+        prereq_analysis = []
+        for prereq, count in potential_prereqs.items():
+            # Calculate frequency
+            frequency = count / total_students
+            
+            # Categorize the relationship
+            relationship_type = "Unknown"
+            if frequency >= 0.95:
+                relationship_type = "Required"
+            elif frequency >= 0.8:
+                relationship_type = "Strongly Recommended"
+            elif frequency >= 0.5:
+                relationship_type = "Common"
+            elif frequency >= 0.2:
+                relationship_type = "Occasional"
+            
+            # Add to analysis
+            prereq_analysis.append({
+                'prerequisite': prereq,
+                'frequency': frequency,
+                'count': count,
+                'relationship': relationship_type
+            })
+        
+        # Sort by frequency
+        prereq_analysis.sort(key=lambda x: x['frequency'], reverse=True)
+        
+        # Identify strong prerequisites (courses most students took)
+        strong_prereqs = [p['prerequisite'] for p in prereq_analysis if p['relationship'] in ["Required", "Strongly Recommended"]]
+        
+        # Identify potential OR relationships
+        or_groups = []
+        remaining_prereqs = [p for p in prereq_analysis if p['relationship'] not in ["Required", "Strongly Recommended"] and p['relationship'] != "Occasional"]
+        
+        # Look for potential OR relationships among remaining prerequisites
+        while remaining_prereqs:
+            prereq1 = remaining_prereqs.pop(0)
+            or_group = [prereq1['prerequisite']]
+            
+            for prereq2 in remaining_prereqs[:]:
+                # If the two courses together cover almost all students (possible OR relationship)
+                combined_frequency = prereq1['frequency'] + prereq2['frequency']
+                if 0.9 <= combined_frequency <= 1.1 and abs(prereq1['frequency'] - prereq2['frequency']) < 0.3:
+                    or_group.append(prereq2['prerequisite'])
+                    remaining_prereqs.remove(prereq2)
+            
+            if len(or_group) > 1:
+                or_groups.append(or_group)
+        
+        # Create the prerequisite structure
+        prereq_structure = {
+            'prerequisites': {
+                'type': 'AND',
+                'courses': strong_prereqs
+            },
+            'or_prerequisites': or_groups,
+            'analysis': prereq_analysis
+        }
+        
+        prerequisites[course] = prereq_structure
+        
+        # Calculate overall confidence
+        # Higher when more students took the course and prerequisites are clear
+        num_students_factor = min(1.0, total_students / 20)  # Max out at 20+ students
+        clarity_factor = 1.0 if strong_prereqs else (0.7 if or_groups else 0.4)
+        prerequisite_confidence[course] = num_students_factor * clarity_factor
+    
+    return {'prerequisites': prerequisites, 'confidence': prerequisite_confidence}
+
+def apply_inferred_prerequisites(course_configs, inferred_prerequisites, confidence_threshold=0.7):
+    """
+    Apply inferred prerequisites to course configurations
+    
+    Args:
+        course_configs (dict): Dictionary of course configurations
+        inferred_prerequisites (dict): Dictionary of inferred prerequisites
+        confidence_threshold (float): Minimum confidence to apply prerequisites
+    
+    Returns:
+        dict: Updated course configurations
+        list: List of changes made
+    """
+    # Make a copy to avoid modifying the original
+    updated_configs = copy.deepcopy(course_configs)
+    changes_made = []
+    
+    # Get prerequisites and confidence
+    prerequisites = inferred_prerequisites.get('prerequisites', {})
+    confidence = inferred_prerequisites.get('confidence', {})
+    
+    for course, prereq_data in prerequisites.items():
+        # Skip if confidence is below threshold
+        if confidence.get(course, 0) < confidence_threshold:
+            continue
+            
+        # Only apply to courses that exist in the configuration
+        if course not in updated_configs:
+            continue
+            
+        # Get current prerequisites
+        current_prereqs = []
+        if 'prerequisites' in updated_configs[course]:
+            if isinstance(updated_configs[course]['prerequisites'], list):
+                current_prereqs = updated_configs[course]['prerequisites']
+            else:
+                current_prereqs = updated_configs[course]['prerequisites'].get('courses', [])
+        
+        # Get current OR prerequisites
+        current_or_prereqs = updated_configs[course].get('or_prerequisites', [])
+        
+        # Identify new AND prerequisites
+        new_and_prereqs = [p for p in prereq_data['prerequisites']['courses'] if p not in current_prereqs]
+        
+        # Identify new OR groups
+        new_or_groups = []
+        for or_group in prereq_data['or_prerequisites']:
+            # Check if this group already exists
+            if not any(set(or_group).issubset(set(group)) for group in current_or_prereqs):
+                new_or_groups.append(or_group)
+        
+        # Apply changes if there are any
+        if new_and_prereqs or new_or_groups:
+            # Update AND prerequisites
+            if new_and_prereqs:
+                if isinstance(updated_configs[course]['prerequisites'], list):
+                    updated_configs[course]['prerequisites'] = current_prereqs + new_and_prereqs
+                else:
+                    updated_configs[course]['prerequisites']['courses'] = current_prereqs + new_and_prereqs
+            
+            # Update OR prerequisites
+            if new_or_groups:
+                updated_configs[course]['or_prerequisites'] = current_or_prereqs + new_or_groups
+            
+            # Record the change
+            changes_made.append({
+                'course': course,
+                'added_prerequisites': new_and_prereqs,
+                'added_or_groups': new_or_groups,
+                'confidence': confidence.get(course, 0)
+            })
+    
+    return updated_configs, changes_made
