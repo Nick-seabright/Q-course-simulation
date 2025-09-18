@@ -809,78 +809,123 @@ def extract_current_students_from_history(processed_data, cutoff_date=None):
 
 def analyze_career_paths(processed_data, min_students=3):
     """
-    Analyze historical data to identify typical career paths for each MOS
+    Analyze historical data to identify typical career paths
+    Works with or without MOS information in the dataset.
     
     Args:
         processed_data (pd.DataFrame): Processed training data
         min_students (int): Minimum number of students required to consider a path valid
         
     Returns:
-        dict: Dictionary with career paths and flexible courses for each MOS
+        dict: Dictionary with career paths and flexible courses
     """
     import copy
     
     # Check if MOS information is available
-    has_mos_data = 'TrainingMOS' in processed_data.columns and not processed_data['TrainingMOS'].isna().all()
+    has_mos_data = ('TrainingMOS' in processed_data.columns and 
+                   not processed_data['TrainingMOS'].isna().all() and
+                   processed_data['TrainingMOS'].notna().sum() > min_students)
+    
+    print(f"MOS data available: {has_mos_data}")
     
     # Group data by student
     student_groups = processed_data.groupby('SSN')
+    total_students = len(student_groups)
     
-    # Store career paths by MOS (or "General" if no MOS data)
-    mos_paths = defaultdict(list)
+    print(f"Analyzing {total_students} student records...")
+    
+    # Track data by MOS and general
+    all_mos_paths = defaultdict(list)
+    all_courses = set()
     course_frequencies = defaultdict(lambda: defaultdict(int))
     course_positions = defaultdict(lambda: defaultdict(list))
+    student_counts = defaultdict(int)
     
-    # Count of students by MOS
-    mos_student_count = defaultdict(int)
+    # Add a general category
+    student_counts["General"] = 0
     
-    # Analyze each student's progression
-    for ssn, student_data in student_groups:
+    # Process each student
+    for i, (ssn, student_data) in enumerate(student_groups):
+        if i % 1000 == 0:
+            print(f"Processing student {i}/{total_students}...")
+            
+        # Check if the student has graduation data
+        has_graduation_data = False
+        if 'Graduated' in student_data.columns:
+            has_graduation_data = any(student_data['Graduated'])
+        elif 'Out Stat' in student_data.columns:
+            has_graduation_data = any(student_data['Out Stat'] == 'G')
+        
         # Skip students with no graduation records
-        if not any(student_data['Graduated']):
+        if not has_graduation_data and ('Graduated' in student_data.columns or 'Out Stat' in student_data.columns):
             continue
             
-        # Get the student's MOS if available, otherwise use "General"
-        if has_mos_data:
-            mos = student_data['TrainingMOS'].iloc[0]
-            if pd.isna(mos) or not mos:  # If MOS is empty for this student
-                mos = "General"
-        else:
-            mos = "General"
-            
-        # Count this student for their MOS
-        mos_student_count[mos] += 1
-        
         # Get completed courses in chronological order
-        completed_courses = student_data[student_data['Graduated']].sort_values('Cls Start Date')
-        
-        # Skip if too few courses
-        if len(completed_courses) < 2:
-            continue
+        try:
+            if 'Graduated' in student_data.columns:
+                completed_courses = student_data[student_data['Graduated']].sort_values('Cls Start Date')
+            elif 'Out Stat' in student_data.columns:
+                completed_courses = student_data[student_data['Out Stat'] == 'G'].sort_values('Cls Start Date')
+            else:
+                # No graduation info, use all courses
+                completed_courses = student_data.sort_values('Cls Start Date')
             
-        # Extract the sequence of courses
-        course_sequence = completed_courses['Course Title'].tolist()
-        
-        # Add this sequence to the MOS paths
-        mos_paths[mos].append(course_sequence)
-        
-        # Track course frequencies and positions in sequences
-        for i, course in enumerate(course_sequence):
-            course_frequencies[mos][course] += 1
-            course_positions[mos][course].append(i)
+            # Skip if too few courses
+            if len(completed_courses) < 2:
+                continue
+                
+            # Extract the sequence of courses
+            course_sequence = completed_courses['Course Title'].tolist()
+            
+            # Skip if no courses found
+            if not course_sequence:
+                continue
+            
+            # Add to the all courses set
+            all_courses.update(course_sequence)
+            
+            # Get the student's MOS if available
+            if has_mos_data and 'TrainingMOS' in student_data.columns:
+                mos = student_data['TrainingMOS'].iloc[0]
+                if pd.notna(mos) and mos in ['18A', '18B', '18C', '18D', '18E']:
+                    # Add to MOS-specific paths
+                    all_mos_paths[mos].append(course_sequence)
+                    student_counts[mos] += 1
+                    
+                    # Track course frequencies and positions for this MOS
+                    for j, course in enumerate(course_sequence):
+                        course_frequencies[mos][course] += 1
+                        course_positions[mos][course].append(j)
+            
+            # Add to general paths regardless of MOS
+            all_mos_paths["General"].append(course_sequence)
+            student_counts["General"] += 1
+            
+            # Track course frequencies and positions for general
+            for j, course in enumerate(course_sequence):
+                course_frequencies["General"][course] += 1
+                course_positions["General"][course].append(j)
+                
+        except Exception as e:
+            print(f"Error processing student {ssn}: {e}")
+            continue
     
-    # Process the data to identify typical paths and flexible courses
+    # Process data into career paths
     career_paths = {}
     
-    for mos, paths in mos_paths.items():
-        # Skip if too few students for this MOS
-        if mos_student_count[mos] < min_students:
+    # Process each MOS (and General)
+    for mos, paths in all_mos_paths.items():
+        # Skip if too few students for this MOS/track
+        if len(paths) < min_students:
+            print(f"Skipping {mos}: only {len(paths)} students (minimum {min_students})")
             continue
+            
+        print(f"Processing {mos}: {len(paths)} students")
             
         # Calculate percentage of students who took each course
         course_percentages = {}
         for course, count in course_frequencies[mos].items():
-            course_percentages[course] = count / mos_student_count[mos]
+            course_percentages[course] = count / len(paths)
         
         # Calculate average position for each course
         avg_positions = {}
@@ -892,42 +937,218 @@ def analyze_career_paths(processed_data, min_students=3):
             std_dev = np.std(positions) if len(positions) > 1 else 0
             position_variability[course] = std_dev
         
+        # Set thresholds based on data availability
+        if len(paths) >= 50:
+            # With lots of data, we can be more selective
+            core_threshold = 0.7 if mos != "General" else 0.4
+            variability_threshold = 1.5
+            flexible_threshold = 0.3 if mos != "General" else 0.2
+        else:
+            # With limited data, use more relaxed thresholds
+            core_threshold = 0.6 if mos != "General" else 0.3
+            variability_threshold = 2.0
+            flexible_threshold = 0.2 if mos != "General" else 0.15
+        
         # Identify core courses (taken by most students in consistent order)
         core_courses = []
         flexible_courses = []
         
         for course, percentage in course_percentages.items():
-            # Core courses are taken by at least 70% of students and have low position variability
-            if percentage >= 0.7 and position_variability[course] < 1.5:
+            # Core courses are taken by many students and have low position variability
+            if percentage >= core_threshold and position_variability[course] < variability_threshold:
                 core_courses.append((course, avg_positions[course]))
-            # Flexible courses are taken by at least 30% of students but have higher position variability
-            elif percentage >= 0.3:
+            # Flexible courses are taken by some students but have higher position variability
+            elif percentage >= flexible_threshold:
                 flexible_courses.append(course)
         
         # Sort core courses by average position to create the typical path
         core_courses.sort(key=lambda x: x[1])
         typical_path = [course for course, _ in core_courses]
         
+        # Find most common first courses
+        first_courses = defaultdict(int)
+        for path in paths:
+            if path:
+                first_courses[path[0]] += 1
+        
+        # Find most common last courses
+        last_courses = defaultdict(int)
+        for path in paths:
+            if path:
+                last_courses[path[-1]] += 1
+        
+        # Make sure the most common first course is at the beginning
+        most_common_first = max(first_courses.items(), key=lambda x: x[1])[0] if first_courses else None
+        if most_common_first and most_common_first in typical_path and typical_path[0] != most_common_first:
+            typical_path.remove(most_common_first)
+            typical_path.insert(0, most_common_first)
+        
+        # Make sure the most common last course is at the end
+        most_common_last = max(last_courses.items(), key=lambda x: x[1])[0] if last_courses else None
+        if most_common_last and most_common_last in typical_path and typical_path[-1] != most_common_last:
+            typical_path.remove(most_common_last)
+            typical_path.append(most_common_last)
+        
         # Store the results
         career_paths[mos] = {
             'typical_path': typical_path,
             'flexible_courses': flexible_courses,
             'course_percentages': course_percentages,
-            'student_count': mos_student_count[mos],
+            'student_count': len(paths),
             'avg_positions': avg_positions,
             'position_variability': position_variability,
             'all_paths': paths
         }
     
+    # If we have enough data but no MOS-specific paths, try to identify tracks
+    if not has_mos_data and "General" in career_paths and career_paths["General"]["student_count"] >= 50:
+        try:
+            print("Attempting to identify distinct tracks from general data...")
+            
+            # Try clustering to find distinct tracks
+            general_paths = career_paths["General"]["all_paths"]
+            all_courses_list = list(all_courses)
+            
+            # Create a matrix of course presence (1 if student took course, 0 otherwise)
+            course_matrix = np.zeros((len(general_paths), len(all_courses_list)))
+            for i, path in enumerate(general_paths):
+                for course in path:
+                    if course in all_courses_list:
+                        j = all_courses_list.index(course)
+                        course_matrix[i, j] = 1
+            
+            # If there are many courses, try to reduce dimensionality
+            if len(all_courses_list) > 100:
+                # Filter to courses taken by at least 5% of students
+                course_counts = np.sum(course_matrix, axis=0)
+                frequent_courses = course_counts >= len(general_paths) * 0.05
+                course_matrix = course_matrix[:, frequent_courses]
+                filtered_courses = [all_courses_list[i] for i in range(len(all_courses_list)) if frequent_courses[i]]
+                all_courses_list = filtered_courses
+            
+            # Import here to avoid dependency if not needed
+            from sklearn.cluster import KMeans
+            
+            # Try different numbers of clusters
+            best_silhouette = -1
+            best_clusters = None
+            best_n_clusters = 0
+            
+            try:
+                from sklearn.metrics import silhouette_score
+                
+                for n_clusters in range(2, min(6, len(general_paths) // min_students)):
+                    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                    cluster_labels = kmeans.fit_predict(course_matrix)
+                    
+                    # Calculate silhouette score
+                    silhouette_avg = silhouette_score(course_matrix, cluster_labels)
+                    print(f"For n_clusters = {n_clusters}, silhouette score is {silhouette_avg}")
+                    
+                    if silhouette_avg > best_silhouette:
+                        best_silhouette = silhouette_avg
+                        best_clusters = cluster_labels
+                        best_n_clusters = n_clusters
+            except Exception as e:
+                print(f"Error in silhouette analysis: {e}")
+                # Fallback to 3 clusters
+                kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
+                best_clusters = kmeans.fit_predict(course_matrix)
+                best_n_clusters = 3
+            
+            # If we found reasonable clusters
+            if best_clusters is not None:
+                print(f"Found {best_n_clusters} distinct tracks in the data")
+                
+                # Process each cluster into a track
+                for cluster_id in range(best_n_clusters):
+                    # Get paths in this cluster
+                    cluster_paths = [general_paths[i] for i in range(len(general_paths)) if best_clusters[i] == cluster_id]
+                    
+                    # Skip if too few paths
+                    if len(cluster_paths) < min_students:
+                        continue
+                    
+                    # Calculate frequencies and positions for this cluster
+                    cluster_frequencies = defaultdict(int)
+                    cluster_positions = defaultdict(list)
+                    
+                    for path in cluster_paths:
+                        for i, course in enumerate(path):
+                            cluster_frequencies[course] += 1
+                            cluster_positions[course].append(i)
+                    
+                    # Calculate course percentages
+                    cluster_percentages = {course: count/len(cluster_paths) 
+                                          for course, count in cluster_frequencies.items()}
+                    
+                    # Calculate average positions
+                    cluster_avg_positions = {course: sum(positions)/len(positions) 
+                                           for course, positions in cluster_positions.items()}
+                    
+                    # Calculate position variability
+                    cluster_variability = {course: np.std(positions) if len(positions) > 1 else 0 
+                                         for course, positions in cluster_positions.items()}
+                    
+                    # Identify core courses for this cluster (more selective criteria)
+                    cluster_core = []
+                    for course, percentage in cluster_percentages.items():
+                        if percentage >= 0.6 and cluster_variability[course] < 1.5:
+                            cluster_core.append((course, cluster_avg_positions[course]))
+                    
+                    # Sort by position
+                    cluster_core.sort(key=lambda x: x[1])
+                    cluster_path = [course for course, _ in cluster_core]
+                    
+                    # Only add if we found a meaningful path
+                    if len(cluster_path) >= 3:
+                        # Find the most distinctive courses for this cluster
+                        general_percentages = career_paths["General"]["course_percentages"]
+                        
+                        distinctive_courses = []
+                        for course, percentage in cluster_percentages.items():
+                            general_pct = general_percentages.get(course, 0)
+                            # Courses much more common in this cluster than overall
+                            if percentage > general_pct * 1.5 and percentage >= 0.5:
+                                distinctive_courses.append((course, percentage/general_pct))
+                        
+                        # Sort by distinctiveness
+                        distinctive_courses.sort(key=lambda x: x[1], reverse=True)
+                        
+                        # Create a name for the track
+                        track_name = f"Track {cluster_id+1}"
+                        if distinctive_courses:
+                            # Use most distinctive course for the name
+                            track_name = f"Track: {distinctive_courses[0][0]}"
+                        
+                        # Add to career paths
+                        career_paths[track_name] = {
+                            'typical_path': cluster_path,
+                            'flexible_courses': [c for c, _ in distinctive_courses if c not in cluster_path],
+                            'course_percentages': cluster_percentages,
+                            'student_count': len(cluster_paths),
+                            'avg_positions': cluster_avg_positions,
+                            'position_variability': cluster_variability,
+                            'all_paths': cluster_paths
+                        }
+                
+        except Exception as e:
+            print(f"Error in track identification: {e}")
+            import traceback
+            print(traceback.format_exc())
+    
     return career_paths
-
-def apply_career_paths_to_configs(course_configs, edited_paths):
+    
+def apply_career_paths_to_configs(course_configs, edited_paths, clear_existing=True, update_mos_paths=True):
     """
     Apply edited career paths to course configurations by setting prerequisites
+    Works with both MOS-specific paths and general/track paths
     
     Args:
         course_configs (dict): Dictionary of course configurations
-        edited_paths (dict): Dictionary of edited career paths by MOS
+        edited_paths (dict): Dictionary of edited career paths by MOS or track
+        clear_existing (bool): Whether to clear existing prerequisites
+        update_mos_paths (bool): Whether to update MOS paths
         
     Returns:
         dict: Updated course configurations
@@ -939,67 +1160,130 @@ def apply_career_paths_to_configs(course_configs, edited_paths):
     updated_configs = copy.deepcopy(course_configs)
     changes_made = []
     
-    # Process each MOS path
-    for mos, path_data in edited_paths.items():
+    # Process each path
+    for path_name, path_data in edited_paths.items():
         typical_path = path_data['typical_path']
         
         # Skip if the path is too short
         if len(typical_path) < 2:
             continue
         
+        # Determine if this is a MOS-specific path or a general track
+        is_mos_path = path_name in ['18A', '18B', '18C', '18D', '18E', 'General']
+        
         # Update each course in the typical path
         for i, course in enumerate(typical_path):
             # Skip if course doesn't exist in configs
             if course not in updated_configs:
-                continue
+                # Create default configuration for this course
+                updated_configs[course] = {
+                    'prerequisites': {
+                        'type': 'AND',
+                        'courses': []
+                    },
+                    'or_prerequisites': [],
+                    'mos_paths': {
+                        '18A': [],
+                        '18B': [],
+                        '18C': [],
+                        '18D': [],
+                        '18E': []
+                    },
+                    'required_for_all_mos': False,
+                    'max_capacity': 50,
+                    'classes_per_year': 4,
+                    'reserved_seats': {
+                        'OF': 0,
+                        'ADE': 0,
+                        'NG': 0
+                    },
+                    'officer_enlisted_ratio': None,
+                    'use_even_mos_ratio': False
+                }
             
-            # Clear existing prerequisites
-            if 'prerequisites' not in updated_configs[course]:
-                updated_configs[course]['prerequisites'] = {
-                    'type': 'AND',
-                    'courses': []
-                }
-            elif isinstance(updated_configs[course]['prerequisites'], list):
-                updated_configs[course]['prerequisites'] = {
-                    'type': 'AND',
-                    'courses': []
-                }
-            else:
-                updated_configs[course]['prerequisites']['courses'] = []
+            # Clear existing prerequisites if requested
+            if clear_existing:
+                if 'prerequisites' not in updated_configs[course]:
+                    updated_configs[course]['prerequisites'] = {
+                        'type': 'AND',
+                        'courses': []
+                    }
+                elif isinstance(updated_configs[course]['prerequisites'], list):
+                    updated_configs[course]['prerequisites'] = {
+                        'type': 'AND',
+                        'courses': []
+                    }
+                else:
+                    updated_configs[course]['prerequisites']['courses'] = []
             
             # Set new prerequisites based on the path
             if i > 0:
                 # Previous course in path becomes the prerequisite
-                updated_configs[course]['prerequisites']['courses'] = [typical_path[i-1]]
+                prereq_course = typical_path[i-1]
                 
+                if clear_existing:
+                    # Replace existing prerequisites
+                    updated_configs[course]['prerequisites']['courses'] = [prereq_course]
+                else:
+                    # Add to existing prerequisites without duplicates
+                    if isinstance(updated_configs[course]['prerequisites'], list):
+                        current_prereqs = updated_configs[course]['prerequisites']
+                        updated_configs[course]['prerequisites'] = {
+                            'type': 'AND',
+                            'courses': current_prereqs
+                        }
+                    else:
+                        current_prereqs = updated_configs[course]['prerequisites'].get('courses', [])
+                    
+                    if prereq_course not in current_prereqs:
+                        current_prereqs.append(prereq_course)
+                        updated_configs[course]['prerequisites']['courses'] = current_prereqs
+                
+                # Record the change
                 changes_made.append({
                     'course': course,
-                    'mos': mos,
-                    'prerequisites': [typical_path[i-1]],
+                    'path': path_name,
+                    'prerequisites': [prereq_course],
                     'action': 'set_prerequisites'
                 })
             
-            # Update MOS paths
-            if 'mos_paths' not in updated_configs[course]:
-                updated_configs[course]['mos_paths'] = {
-                    '18A': [],
-                    '18B': [],
-                    '18C': [],
-                    '18D': [],
-                    '18E': []
-                }
-            
-            # Set this course as part of this MOS path
-            if mos in updated_configs[course]['mos_paths']:
-                # This course is in the path for this MOS
-                updated_configs[course]['mos_paths'][mos] = []
+            # Update MOS paths if requested and this is a MOS-specific path
+            if update_mos_paths and is_mos_path and path_name in ['18A', '18B', '18C', '18D', '18E']:
+                if 'mos_paths' not in updated_configs[course]:
+                    updated_configs[course]['mos_paths'] = {
+                        '18A': [],
+                        '18B': [],
+                        '18C': [],
+                        '18D': [],
+                        '18E': []
+                    }
                 
-                # Record if this is a new addition
-                if not any(change['course'] == course and change['mos'] == mos and change['action'] == 'added_to_mos_path' for change in changes_made):
-                    changes_made.append({
-                        'course': course,
-                        'mos': mos,
-                        'action': 'added_to_mos_path'
-                    })
+                # Mark this course as part of this MOS path
+                updated_configs[course]['mos_paths'][path_name] = []
+                
+                # Record the change
+                changes_made.append({
+                    'course': course,
+                    'path': path_name,
+                    'action': 'added_to_mos_path'
+                })
+            
+            # If this is the General path and update_mos_paths is enabled,
+            # mark the course as required for all MOS paths
+            if update_mos_paths and path_name == 'General':
+                updated_configs[course]['required_for_all_mos'] = True
+                
+                # Record the change
+                changes_made.append({
+                    'course': course,
+                    'path': path_name,
+                    'action': 'marked_required_for_all'
+                })
+            
+            # For track paths that aren't MOS-specific, add as prerequisites but don't
+            # modify MOS paths or required_for_all_mos
+            if not is_mos_path:
+                # Already handled prerequisites above, no additional action needed
+                pass
     
     return updated_configs, changes_made

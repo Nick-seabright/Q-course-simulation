@@ -752,6 +752,7 @@ def display_config_page():
         with metrics_col3:
             st.metric("Recycle Rate", f"{hist_data.get('recycle_rate', 0):.1%}")
 
+    # Add this section to display_config_page
     st.subheader("Career Path Analysis and Editor")
     st.write("Analyze historical data to identify typical career paths for each MOS, then edit them to your preference.")
     
@@ -833,43 +834,98 @@ def display_config_page():
                     st.success(f"Added {new_course} to path")
                     st.rerun()
                 
-                # Edit the current path
+                # Convert path to a dataframe for editing
                 path_items = []
                 for j, course in enumerate(path_data['typical_path']):
                     path_items.append({
-                        "id": j,
+                        "order": j+1,
                         "course": course
                     })
-                
-                # Use a dataframe with drag-and-drop capability
-                edited_df = pd.DataFrame(path_items)
-                
-                if not edited_df.empty:
-                    edited_path = st.data_editor(
-                        edited_df,
-                        column_config={
-                            "id": st.column_config.NumberColumn(
-                                "Position",
-                                help="Drag rows to reorder",
-                                width="small",
-                            ),
-                            "course": st.column_config.TextColumn(
-                                "Course",
-                                width="large",
-                            )
-                        },
-                        hide_index=True,
-                        key=f"path_editor_{mos}",
-                        use_container_width=True,
-                        num_rows="fixed"
-                    )
-                    
-                    # Update the path based on the edited dataframe
-                    if len(edited_path) > 0:
-                        # Get the courses in order
-                        ordered_courses = edited_path.sort_values('id')['course'].tolist()
-                        # Update the path
-                        path_data['typical_path'] = ordered_courses
+    
+                path_df = pd.DataFrame(path_items)
+    
+                # Use two columns for editing and visualization
+                edit_col, viz_col = st.columns([3, 2])
+    
+                with edit_col:
+                    # Create editable dataframe with drag-and-drop
+                    if not path_df.empty:
+                        edited_df = st.data_editor(
+                            path_df,
+                            column_config={
+                                "order": st.column_config.NumberColumn(
+                                    "Order",
+                                    help="Drag rows to reorder courses",
+                                    width="small",
+                                ),
+                                "course": st.column_config.TextColumn(
+                                    "Course",
+                                    width="large",
+                                )
+                            },
+                            hide_index=True,
+                            key=f"path_editor_{mos}",
+                            use_container_width=True,
+                            num_rows="dynamic",
+                        )
+    
+                        # Update the path based on the edited dataframe
+                        if len(edited_df) > 0:
+                            # Get the courses in order
+                            ordered_courses = edited_df.sort_values('order')['course'].tolist()
+                            # Update the path
+                            path_data['typical_path'] = ordered_courses
+                    else:
+                        st.info("No courses in the path yet. Add some courses to begin editing.")
+    
+                with viz_col:
+                    # Create a visual representation of the current path
+                    if path_data['typical_path']:
+                        # Draw a simple flow chart
+                        fig = go.Figure()
+                        
+                        # Adjust for vertical display in the smaller column
+                        for j, course in enumerate(path_data['typical_path']):
+                            # Add node for the course
+                            fig.add_trace(go.Scatter(
+                                x=[0],
+                                y=[-j],  # Negative to go from top to bottom
+                                mode='markers+text',
+                                text=[course],
+                                textposition='middle right',
+                                marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
+                                name=course
+                            ))
+                            
+                            # Add arrow to the next course
+                            if j < len(path_data['typical_path']) - 1:
+                                fig.add_annotation(
+                                    x=0,
+                                    y=-j-0.5,
+                                    ax=0,
+                                    ay=-j,
+                                    xref='x',
+                                    yref='y',
+                                    axref='x',
+                                    ayref='y',
+                                    showarrow=True,
+                                    arrowhead=2,
+                                    arrowsize=1,
+                                    arrowwidth=2,
+                                    arrowcolor='rgba(66, 133, 244, 0.8)'
+                                )
+                        
+                        # Update layout for vertical flow chart
+                        fig.update_layout(
+                            showlegend=False,
+                            xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
+                            yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
+                            margin=dict(l=10, r=10, t=10, b=10),
+                            height=min(400, len(path_data['typical_path']) * 50 + 50),
+                            width=200
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
                 
                 # Option to remove courses
                 course_to_remove = st.selectbox(
@@ -949,59 +1005,11 @@ def display_config_page():
                         st.success(f"Moved {flexible_to_path} to path")
                         st.rerun()
                 
-                # Show the current path
+                # Show the current path as text
                 st.write("### Current Career Path")
                 if path_data['typical_path']:
                     path_str = " → ".join(path_data['typical_path'])
                     st.write(path_str)
-                    
-                    # Create a visual representation of the path
-                    try:
-                        fig = go.Figure()
-                        
-                        # Plot nodes for each course in the path
-                        for j, course in enumerate(path_data['typical_path']):
-                            fig.add_trace(go.Scatter(
-                                x=[j],
-                                y=[0],
-                                mode='markers+text',
-                                text=[course],
-                                textposition='top center',
-                                marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
-                                name=course
-                            ))
-                            
-                            # Add arrow to the next course
-                            if j < len(path_data['typical_path']) - 1:
-                                fig.add_annotation(
-                                    x=j+0.5,
-                                    y=0,
-                                    ax=j,
-                                    ay=0,
-                                    xref='x',
-                                    yref='y',
-                                    axref='x',
-                                    ayref='y',
-                                    showarrow=True,
-                                    arrowhead=2,
-                                    arrowsize=1,
-                                    arrowwidth=2,
-                                    arrowcolor='rgba(66, 133, 244, 0.8)'
-                                )
-                        
-                        # Update layout
-                        fig.update_layout(
-                            showlegend=False,
-                            xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
-                            yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
-                            margin=dict(l=20, r=20, t=20, b=20),
-                            height=200,
-                            width=max(600, len(path_data['typical_path']) * 100)
-                        )
-                        
-                        st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Error creating visualization: {e}")
                 else:
                     st.write("No courses in path.")
         
