@@ -1006,3 +1006,116 @@ def check_prerequisite_order(schedule, course_configs):
         violations.append(f"Error checking prerequisite order: {e}")
                     
     return violations
+
+def apply_custom_paths_to_configs(course_configs, custom_paths):
+    """
+    Apply custom career paths to course configurations by setting prerequisites
+    
+    Args:
+        course_configs (dict): Dictionary of course configurations
+        custom_paths (dict): Dictionary of custom career paths by MOS
+        
+    Returns:
+        dict: Updated course configurations
+        list: List of changes made
+    """
+    import copy
+    
+    # Make a copy to avoid modifying the original
+    updated_configs = copy.deepcopy(course_configs)
+    changes_made = []
+    
+    # Process each MOS path
+    for mos, path_data in custom_paths.items():
+        typical_path = path_data['path']
+        flexible_courses = path_data.get('flexible_courses', [])
+        
+        # Skip if the path is empty
+        if not typical_path:
+            continue
+        
+        # Update each course in the typical path
+        for i, course in enumerate(typical_path):
+            # Skip if course doesn't exist in configs
+            if course not in updated_configs:
+                continue
+            
+            # Clear existing prerequisites
+            if 'prerequisites' not in updated_configs[course]:
+                updated_configs[course]['prerequisites'] = {
+                    'type': 'AND',
+                    'courses': []
+                }
+            elif isinstance(updated_configs[course]['prerequisites'], list):
+                updated_configs[course]['prerequisites'] = {
+                    'type': 'AND',
+                    'courses': []
+                }
+            else:
+                updated_configs[course]['prerequisites']['courses'] = []
+            
+            # Set new prerequisites based on the path
+            if i > 0:
+                # Previous course in path becomes the prerequisite
+                updated_configs[course]['prerequisites']['courses'] = [typical_path[i-1]]
+                
+                changes_made.append({
+                    'course': course,
+                    'mos': mos,
+                    'prerequisites': [typical_path[i-1]],
+                    'action': 'set_prerequisites'
+                })
+            
+            # Update MOS paths
+            if 'mos_paths' not in updated_configs[course]:
+                updated_configs[course]['mos_paths'] = {
+                    '18A': [],
+                    '18B': [],
+                    '18C': [],
+                    '18D': [],
+                    '18E': []
+                }
+            
+            # Set this course as part of this MOS path
+            if mos in updated_configs[course]['mos_paths']:
+                # This course is in the path for this MOS
+                updated_configs[course]['mos_paths'][mos] = []
+                
+                # Record if this is a new addition
+                if not any(change['course'] == course and change['mos'] == mos and change['action'] == 'added_to_mos_path' for change in changes_made):
+                    changes_made.append({
+                        'course': course,
+                        'mos': mos,
+                        'action': 'added_to_mos_path'
+                    })
+        
+        # Handle flexible courses
+        for course in flexible_courses:
+            # Skip if course doesn't exist in configs
+            if course not in updated_configs:
+                continue
+                
+            # Update MOS paths
+            if 'mos_paths' not in updated_configs[course]:
+                updated_configs[course]['mos_paths'] = {
+                    '18A': [],
+                    '18B': [],
+                    '18C': [],
+                    '18D': [],
+                    '18E': []
+                }
+            
+            # Set this course as part of this MOS path
+            if mos in updated_configs[course]['mos_paths']:
+                # This course is in the path for this MOS
+                updated_configs[course]['mos_paths'][mos] = []
+                
+                # Record if this is a new addition
+                if not any(change['course'] == course and change['mos'] == mos and change['action'] == 'added_to_mos_path' for change in changes_made):
+                    changes_made.append({
+                        'course': course,
+                        'mos': mos,
+                        'action': 'added_as_flexible_course'
+                    })
+    
+    return updated_configs, changes_made
