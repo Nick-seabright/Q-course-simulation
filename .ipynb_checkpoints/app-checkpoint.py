@@ -1594,10 +1594,8 @@ def display_career_path_builder():
 
 def display_config_page():
     st.header("Course Configuration")
-    
     if 'processed_data' not in st.session_state or st.session_state.processed_data is None:
         st.warning("Please upload and process data first.")
-        
         # Navigation button to upload page
         if st.button("Go to Upload Data", use_container_width=True):
             st.session_state.current_page = "Upload Data"
@@ -1678,229 +1676,12 @@ def display_config_page():
             '18E': []
         }
         config['required_for_all_mos'] = False
-    
-    # Configure prerequisite type
-    st.subheader("Prerequisites")
-    with st.expander("How Prerequisites Work"):
-        st.markdown("""
-        ### Prerequisite Types:
-        1. **All Required (AND)**: Student must complete ALL of the specified courses before taking this course.
-        2. **Any Required (OR)**: Student must complete ANY ONE of the specified courses before taking this course.
-        3. **Complex (AND/OR)**: For advanced prerequisite relationships. You can define:
-           - Courses that ALL must be completed (AND logic)
-           - Groups of courses where ANY ONE from EACH group must be completed (OR logic within groups, AND logic between groups)
-        4. **MOS-Specific Paths**: Define different prerequisites for each MOS training path (18A, 18B, 18C, 18D, 18E)
-        
-        #### Example:
-        If you want to require either "Course A" OR "Course B", AND either "Course C" OR "Course D":
-        1. Leave the "Student must complete ALL of these courses" field empty
-        2. Create Group 1 with "Course A" and "Course B"
-        3. Create Group 2 with "Course C" and "Course D"
-        """)
-    
-    prerequisite_type = st.radio(
-        "Prerequisite Configuration Method",
-        ["General Prerequisites", "MOS-Specific Paths"]
-    )
-    
-    prerequisite_options = [c for c in unique_courses if c != selected_course]
-    
-    # Use session state to prevent the dropdown selection from resetting
-    if 'temp_prerequisites' not in st.session_state:
-        # Initialize with current config
-        if prerequisite_type == "General Prerequisites":
-            st.session_state.temp_prerequisites = config['prerequisites']['courses']
-        else:
-            st.session_state.temp_prerequisites = {}
-            for mos in ['18A', '18B', '18C', '18D', '18E']:
-                st.session_state.temp_prerequisites[mos] = config['mos_paths'].get(mos, [])
-    
-    if prerequisite_type == "General Prerequisites":
-        # Use the existing AND/OR prerequisite system
-        prereq_logic = st.radio(
-            "Prerequisite Logic",
-            ["All Required (AND)", "Any Required (OR)", "Complex (AND/OR)"],
-            index=0 if config['prerequisites']['type'] == 'AND' and not config['or_prerequisites'] else
-                1 if config['prerequisites']['type'] == 'OR' and not config['or_prerequisites'] else 2
-        )
-        
-        if prereq_logic == "All Required (AND)":
-            # Simple AND logic - all courses must be taken
-            config['prerequisites']['type'] = 'AND'
-            selected_prerequisites = st.multiselect(
-                "Student must complete ALL of these courses:",
-                prerequisite_options,
-                default=st.session_state.temp_prerequisites,
-                key="and_prereqs"
-            )
-            st.session_state.temp_prerequisites = selected_prerequisites
-            
-            # Update button to commit changes
-            if st.button("Update Prerequisites", key="update_and_prereqs"):
-                config['prerequisites']['courses'] = st.session_state.temp_prerequisites
-                config['or_prerequisites'] = []  # Clear any OR prerequisites
-                st.success("Prerequisites updated!")
-        
-        elif prereq_logic == "Any Required (OR)":
-            # Simple OR logic - any course can be taken
-            config['prerequisites']['type'] = 'OR'
-            selected_prerequisites = st.multiselect(
-                "Student must complete ANY ONE of these courses:",
-                prerequisite_options,
-                default=st.session_state.temp_prerequisites,
-                key="or_prereqs"
-            )
-            st.session_state.temp_prerequisites = selected_prerequisites
-            
-            # Update button to commit changes
-            if st.button("Update Prerequisites", key="update_or_prereqs"):
-                config['prerequisites']['courses'] = st.session_state.temp_prerequisites
-                config['or_prerequisites'] = []  # Clear any complex OR prerequisites
-                st.success("Prerequisites updated!")
-        
-        else:  # Complex AND/OR
-            # For complex logic, we'll use the or_prerequisites structure
-            st.write("Define complex prerequisite relationships:")
-            
-            # First, define any required courses (AND logic)
-            if 'temp_and_prereqs' not in st.session_state:
-                st.session_state.temp_and_prereqs = config['prerequisites']['courses'] if config['prerequisites']['type'] == 'AND' else []
-            
-            and_prerequisites = st.multiselect(
-                "Student must complete ALL of these courses (leave empty if none):",
-                prerequisite_options,
-                default=st.session_state.temp_and_prereqs,
-                key="complex_and_prereqs"
-            )
-            st.session_state.temp_and_prereqs = and_prerequisites
-            
-            # Then, define sets of OR prerequisites
-            st.write("AND the student must complete at least one course from EACH of the following groups:")
-            
-            # Initialize or_prerequisites if needed
-            if 'temp_or_groups' not in st.session_state:
-                st.session_state.temp_or_groups = config['or_prerequisites'].copy() if config['or_prerequisites'] else [[]]
-            
-            # Display existing OR groups
-            or_groups = st.session_state.temp_or_groups.copy()
-            updated_or_groups = []
-            
-            for i, group in enumerate(or_groups):
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    selected_or_courses = st.multiselect(
-                        f"Group {i+1}: Student must complete ANY ONE of these courses:",
-                        [c for c in prerequisite_options if c not in and_prerequisites],
-                        default=group,
-                        key=f"or_group_{i}"
-                    )
-                    if selected_or_courses:  # Only add non-empty groups
-                        updated_or_groups.append(selected_or_courses)
-                
-                with col2:
-                    if st.button(f"Remove Group {i+1}", key=f"remove_group_{i}"):
-                        pass  # We'll filter out this group by not adding it to updated_or_groups
-            
-            # Add a button to add a new OR group
-            if st.button("Add Another OR Group"):
-                updated_or_groups.append([])  # Add an empty group
-            
-            st.session_state.temp_or_groups = updated_or_groups
-            
-            # Update button to commit changes
-            if st.button("Update Prerequisites", key="update_complex_prereqs"):
-                config['prerequisites'] = {
-                    'type': 'AND',
-                    'courses': st.session_state.temp_and_prereqs
-                }
-                config['or_prerequisites'] = st.session_state.temp_or_groups
-                st.success("Complex prerequisites updated!")
-    
-    else:  # MOS-Specific Paths
-        st.write("Configure prerequisites for each MOS training path:")
-        
-        # Option to make this course required for all MOS paths
-        required_for_all = st.checkbox("This course is required for all MOS paths",
-                                      value=config.get('required_for_all_mos', False))
-        config['required_for_all_mos'] = required_for_all
-        
-        if required_for_all:
-            st.info("This course will be required for all students regardless of MOS path.")
-        
-        # Initialize the temp state for MOS paths if needed
-        if 'temp_mos_paths' not in st.session_state:
-            st.session_state.temp_mos_paths = {}
-            for mos in ['18A', '18B', '18C', '18D', '18E']:
-                st.session_state.temp_mos_paths[mos] = config['mos_paths'].get(mos, [])
-        
-        # Configure MOS-specific prerequisites
-        mos_tabs = st.tabs(['18A (Officer)', '18B (Weapons)', '18C (Engineer)', '18D (Medical)', '18E (Communications)'])
-        
-        for i, mos in enumerate(['18A', '18B', '18C', '18D', '18E']):
-            with mos_tabs[i]:
-                st.write(f"Configure prerequisites for {mos} path:")
-                
-                # Check if this course is part of this MOS path
-                is_in_path = st.checkbox(f"This course is part of the {mos} training path",
-                                        value=len(config['mos_paths'].get(mos, [])) > 0 or selected_course in config['mos_paths'].get(mos, []))
-                
-                if is_in_path:
-                    # If it's part of the path, configure prerequisites for this MOS
-                    mos_prereqs = st.multiselect(
-                        f"Prerequisites for {mos} path:",
-                        prerequisite_options,
-                        default=st.session_state.temp_mos_paths.get(mos, []),
-                        key=f"mos_prereqs_{mos}"
-                    )
-                    st.session_state.temp_mos_paths[mos] = mos_prereqs
-                else:
-                    # If not part of this MOS path, clear prerequisites
-                    st.session_state.temp_mos_paths[mos] = []
-        
-        # Update button to commit changes
-        if st.button("Update MOS Paths", key="update_mos_paths"):
-            for mos in ['18A', '18B', '18C', '18D', '18E']:
-                config['mos_paths'][mos] = st.session_state.temp_mos_paths.get(mos, [])
-            st.success("MOS paths updated!")
-    
-    # Display the current prerequisite structure for clarity
-    st.subheader("Current Prerequisites Configuration")
-    
-    if prerequisite_type == "General Prerequisites":
-        if prereq_logic == "All Required (AND)" and config['prerequisites']['courses']:
-            st.write("Student must complete ALL of these courses:")
-            st.write(", ".join(config['prerequisites']['courses']))
-        elif prereq_logic == "Any Required (OR)" and config['prerequisites']['courses']:
-            st.write("Student must complete ANY ONE of these courses:")
-            st.write(", ".join(config['prerequisites']['courses']))
-        else:
-            if config['prerequisites']['courses']:
-                st.write("Student must complete ALL of these courses:")
-                st.write(", ".join(config['prerequisites']['courses']))
-            
-            if config['or_prerequisites']:
-                st.write("AND at least one course from EACH of these groups:")
-                for i, group in enumerate(config['or_prerequisites']):
-                    if group:  # Only show non-empty groups
-                        st.write(f"Group {i+1}: {' OR '.join(group)}")
-    else:  # MOS-Specific Paths
-        if config['required_for_all_mos']:
-            st.write("This course is required for all MOS paths.")
-        
-        st.write("MOS-specific prerequisites:")
-        for mos in ['18A', '18B', '18C', '18D', '18E']:
-            prereqs = config['mos_paths'].get(mos, [])
-            if prereqs:
-                st.write(f"{mos}: {', '.join(prereqs)}")
-            else:
-                if config['required_for_all_mos']:
-                    st.write(f"{mos}: No additional prerequisites")
-                else:
-                    st.write(f"{mos}: Not in this training path")
-    
+
+    # Note about prerequisites being managed in Career Path Builder
+    st.info("Prerequisites are now managed in the Career Path Builder page. Any changes made there will be reflected here.")
+
     # Configure capacity
     st.subheader("Class Capacity")
-    
     max_capacity = st.number_input(
         "Maximum number of students per class",
         min_value=1,
@@ -1910,7 +1691,6 @@ def display_config_page():
     
     # Configure classes per year
     st.subheader("Schedule Frequency")
-    
     classes_per_year = st.number_input(
         "Number of classes per fiscal year (Oct 1 - Sep 30)",
         min_value=1,
@@ -1920,14 +1700,11 @@ def display_config_page():
     
     # Configure reserved seats
     st.subheader("Reserved Seats")
-    
     col1, col2, col3 = st.columns(3)
-    
     with col1:
         # Ensure reserved seats are integers
         if not isinstance(config['reserved_seats']['OF'], int):
             config['reserved_seats']['OF'] = int(config['reserved_seats']['OF'])
-        
         of_seats = st.number_input(
             "OF (Officer) Seats",
             min_value=0,
@@ -1935,12 +1712,10 @@ def display_config_page():
             value=int(config['reserved_seats']['OF'])
         )
         config['reserved_seats']['OF'] = int(of_seats)
-    
     with col2:
         # Ensure reserved seats are integers
         if not isinstance(config['reserved_seats']['ADE'], int):
             config['reserved_seats']['ADE'] = int(config['reserved_seats']['ADE'])
-        
         ade_seats = st.number_input(
             "ADE (Active Duty Enlisted) Seats",
             min_value=0,
@@ -1948,12 +1723,10 @@ def display_config_page():
             value=int(config['reserved_seats']['ADE'])
         )
         config['reserved_seats']['ADE'] = int(ade_seats)
-    
     with col3:
         # Ensure reserved seats are integers
         if not isinstance(config['reserved_seats']['NG'], int):
             config['reserved_seats']['NG'] = int(config['reserved_seats']['NG'])
-        
         ng_seats = st.number_input(
             "NG (National Guard) Seats",
             min_value=0,
@@ -1969,15 +1742,11 @@ def display_config_page():
     
     # Officer to Enlisted ratio
     st.subheader("Officer to Enlisted Ratio")
-    
     with st.expander("About Officer-Enlisted Ratio"):
         st.markdown("""
         **No Ratio**: The class will accept any mix of officers and enlisted personnel up to capacity.
-        
         **1:4 Ratio**: For every 1 officer, the class should have 4 enlisted personnel. The system will try to maintain this ratio when assigning students.
-        
         **Custom Ratio**: Enter your own ratio in the format "1:5" (1 officer to 5 enlisted).
-        
         Note: Ratios are maintained as students are added to classes. If a student would cause the ratio to deviate too far from the target, they may not be accepted into the class.
         """)
     
@@ -2004,40 +1773,32 @@ def display_config_page():
         custom_ratio = st.text_input("Enter custom ratio (format: 1:4)",
                                     value=current_ratio if current_ratio and current_ratio not in ratio_options else "1:4")
         config['officer_enlisted_ratio'] = custom_ratio
-    
     elif selected_ratio == "No Ratio":
         config['officer_enlisted_ratio'] = None  # Store None for no ratio
         st.info("No officer-to-enlisted ratio will be enforced for this course.")
-    
     else:
         config['officer_enlisted_ratio'] = selected_ratio
     
     # Add MOS Allocation Settings
     st.subheader("MOS Allocation Settings")
-    
     use_even_mos_ratio = st.checkbox(
         "Use equal allocation for all MOS paths",
         value=config.get('use_even_mos_ratio', False),
         help="When enabled, the system will automatically allocate seats evenly across all MOS paths (18A, 18B, 18C, 18D, 18E)"
     )
     config['use_even_mos_ratio'] = use_even_mos_ratio
-    
     if use_even_mos_ratio:
         st.info("Classes will have seats allocated equally among all MOS paths. This setting will override individual MOS allocations in the Schedule Builder.")
     
     # Show historical metrics for this course
     if selected_course in st.session_state.historical_analysis:
         st.subheader("Historical Data")
-        
         hist_data = st.session_state.historical_analysis[selected_course]
         metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
-        
         with metrics_col1:
             st.metric("Pass Rate", f"{hist_data.get('pass_rate', 0):.1%}")
-        
         with metrics_col2:
             st.metric("Avg. Duration", f"{hist_data.get('avg_duration', 0):.1f} days")
-        
         with metrics_col3:
             st.metric("Recycle Rate", f"{hist_data.get('recycle_rate', 0):.1%}")
     
@@ -2048,14 +1809,11 @@ def display_config_page():
     
     # After the "Save Configuration" button, add save/load functionality for all configurations
     st.subheader("Save/Load All Course Configurations")
-    
     col1, col2 = st.columns(2)
-    
     with col1:
         if st.button("Save All Configurations", use_container_width=True):
             # Convert to JSON
             config_json = json.dumps(st.session_state.course_configs, indent=2, default=lambda o: str(o) if isinstance(o, (datetime.date, datetime.datetime)) else o)
-            
             # Provide download button
             st.download_button(
                 label="Download Configurations JSON",
@@ -2064,18 +1822,14 @@ def display_config_page():
                 mime="application/json",
                 use_container_width=True
             )
-    
     with col2:
         uploaded_configs = st.file_uploader("Upload Configurations JSON", type=["json"], key="config_uploader")
-        
         if uploaded_configs is not None:
             try:
                 loaded_configs = json.load(uploaded_configs)
-                
                 # Apply backward compatibility
                 for course, config in loaded_configs.items():
                     ensure_config_compatibility(config)
-                
                 # Confirm before overwriting
                 if st.checkbox("Overwrite existing configurations?", key="overwrite_configs"):
                     st.session_state.course_configs = loaded_configs
@@ -2086,19 +1840,16 @@ def display_config_page():
                     st.session_state.course_configs.update(loaded_configs)
                     st.success("Configurations merged successfully!")
                     st.rerun()
-            
             except Exception as e:
                 st.error(f"Error loading configurations: {e}")
     
     # Navigation buttons
     st.write("---")
     col1, col2 = st.columns(2)
-    
     with col1:
         if st.button("← Back to Career Path Builder", use_container_width=True):
             st.session_state.current_page = "Career Path Builder"
             st.rerun()
-    
     with col2:
         if st.button("Continue to Schedule Builder →", use_container_width=True):
             st.session_state.current_page = "Schedule Builder"
@@ -2337,10 +2088,8 @@ def display_schedule_builder():
         # MOS allocation for multiple classes
         course_config = st.session_state.course_configs.get(course_title, {})
         use_even_mos_ratio = course_config.get('use_even_mos_ratio', False)
-        
         if use_even_mos_ratio:
             st.info(f"Using equal allocation for all MOS paths. Each MOS will receive {multi_class_size // 5} seats.")
-            
             multi_mos_allocation = {
                 '18A': multi_class_size // 5,
                 '18B': multi_class_size // 5,
@@ -2348,51 +2097,34 @@ def display_schedule_builder():
                 '18D': multi_class_size // 5,
                 '18E': multi_class_size // 5,
             }
-            
             # Handle any remainder
             remainder = multi_class_size - (multi_class_size // 5 * 5)
             for i, mos in enumerate(['18A', '18B', '18C', '18D', '18E']):
                 if i < remainder:
                     multi_mos_allocation[mos] += 1
+                    
+            # Display the allocation
+            st.write("MOS allocation that will be used:")
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.metric("18A", multi_mos_allocation['18A'])
+            with col2:
+                st.metric("18B", multi_mos_allocation['18B'])
+            with col3:
+                st.metric("18C", multi_mos_allocation['18C'])
+            with col4:
+                st.metric("18D", multi_mos_allocation['18D'])
+            with col5:
+                st.metric("18E", multi_mos_allocation['18E'])
         else:
-            # Manual MOS allocation
-            st.write("Specify MOS allocation to use for all classes:")
-            multi_cols = st.columns(5)
-            multi_mos_allocation = {}
-            multi_total_allocated = 0
-            
-            with multi_cols[0]:
-                multi_mos_18a = st.number_input("18A (Officer)", min_value=0, max_value=int(multi_class_size), value=0, key="multi_18a")
-                multi_mos_allocation['18A'] = multi_mos_18a
-                multi_total_allocated += multi_mos_18a
-            
-            with multi_cols[1]:
-                multi_mos_18b = st.number_input("18B (Weapons)", min_value=0, max_value=int(multi_class_size), value=0, key="multi_18b")
-                multi_mos_allocation['18B'] = multi_mos_18b
-                multi_total_allocated += multi_mos_18b
-            
-            with multi_cols[2]:
-                multi_mos_18c = st.number_input("18C (Engineer)", min_value=0, max_value=int(multi_class_size), value=0, key="multi_18c")
-                multi_mos_allocation['18C'] = multi_mos_18c
-                multi_total_allocated += multi_mos_18c
-            
-            with multi_cols[3]:
-                multi_mos_18d = st.number_input("18D (Medical)", min_value=0, max_value=int(multi_class_size), value=0, key="multi_18d")
-                multi_mos_allocation['18D'] = multi_mos_18d
-                multi_total_allocated += multi_mos_18d
-            
-            with multi_cols[4]:
-                multi_mos_18e = st.number_input("18E (Communications)", min_value=0, max_value=int(multi_class_size), value=0, key="multi_18e")
-                multi_mos_allocation['18E'] = multi_mos_18e
-                multi_total_allocated += multi_mos_18e
-            
-            # Validate MOS allocation
-            if multi_total_allocated > multi_class_size:
-                st.error(f"Total MOS allocation ({multi_total_allocated}) exceeds class size ({multi_class_size}).")
-            elif multi_total_allocated < multi_class_size:
-                st.warning(f"Total MOS allocation ({multi_total_allocated}) is less than class size ({multi_class_size}). {multi_class_size - multi_total_allocated} seats are unallocated.")
-            else:
-                st.success(f"MOS allocation complete ({multi_total_allocated}/{multi_class_size} seats allocated)")
+            st.warning("This course is not configured to use equal MOS allocation. All MOS allocations will be set to 0.")
+            multi_mos_allocation = {
+                '18A': 0,
+                '18B': 0,
+                '18C': 0,
+                '18D': 0,
+                '18E': 0
+            }
         
         # Add all classes button
         if st.button("Add All Classes", use_container_width=True):
@@ -2423,15 +2155,13 @@ def display_schedule_builder():
                     st.rerun()  # Refresh to show updated schedule
     
     # Add Training MOS allocation
-    st.subheader("Training MOS Allocation for Single Class")
-    
+    st.subheader("MOS Allocation")
     # Check if the course is configured to use even MOS ratio
     course_config = st.session_state.course_configs.get(course_title, {})
     use_even_mos_ratio = course_config.get('use_even_mos_ratio', False)
     
     if use_even_mos_ratio:
         st.info(f"Using equal allocation for all MOS paths as configured in Course Configuration. Each MOS will receive {class_size // 5} seats.")
-        
         # Create an even distribution across all MOS paths
         mos_allocation = {
             '18A': class_size // 5,
@@ -2440,7 +2170,6 @@ def display_schedule_builder():
             '18D': class_size // 5,
             '18E': class_size // 5,
         }
-        
         # Handle any remainder
         remainder = class_size - (class_size // 5 * 5)
         for i, mos in enumerate(['18A', '18B', '18C', '18D', '18E']):
@@ -2449,65 +2178,29 @@ def display_schedule_builder():
         
         # Display the allocation
         col1, col2, col3, col4, col5 = st.columns(5)
-        
         with col1:
             st.metric("18A (Officer)", mos_allocation['18A'])
-        
         with col2:
             st.metric("18B (Weapons)", mos_allocation['18B'])
-        
         with col3:
             st.metric("18C (Engineer)", mos_allocation['18C'])
-        
         with col4:
             st.metric("18D (Medical)", mos_allocation['18D'])
-        
         with col5:
             st.metric("18E (Communications)", mos_allocation['18E'])
         
         total_allocated = sum(mos_allocation.values())
         st.success(f"MOS allocation complete ({total_allocated}/{class_size} seats allocated)")
-    
     else:
-        # Original MOS allocation code for manual input
-        st.write("Specify the number of seats reserved for each MOS path:")
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        mos_allocation = {}
-        total_allocated = 0
-        
-        with col1:
-            mos_18a = st.number_input("18A (Officer)", min_value=0, max_value=int(class_size), value=0)
-            mos_allocation['18A'] = mos_18a
-            total_allocated += mos_18a
-        
-        with col2:
-            mos_18b = st.number_input("18B (Weapons)", min_value=0, max_value=int(class_size), value=0)
-            mos_allocation['18B'] = mos_18b
-            total_allocated += mos_18b
-        
-        with col3:
-            mos_18c = st.number_input("18C (Engineer)", min_value=0, max_value=int(class_size), value=0)
-            mos_allocation['18C'] = mos_18c
-            total_allocated += mos_18c
-        
-        with col4:
-            mos_18d = st.number_input("18D (Medical)", min_value=0, max_value=int(class_size), value=0)
-            mos_allocation['18D'] = mos_18d
-            total_allocated += mos_18d
-        
-        with col5:
-            mos_18e = st.number_input("18E (Communications)", min_value=0, max_value=int(class_size), value=0)
-            mos_allocation['18E'] = mos_18e
-            total_allocated += mos_18e
-        
-        # Validate MOS allocation
-        if total_allocated > class_size:
-            st.error(f"Total MOS allocation ({total_allocated}) exceeds class size ({class_size}).")
-        elif total_allocated < class_size:
-            st.warning(f"Total MOS allocation ({total_allocated}) is less than class size ({class_size}). {class_size - total_allocated} seats are unallocated.")
-        else:
-            st.success(f"MOS allocation complete ({total_allocated}/{class_size} seats allocated)")
+        st.warning("This course is not configured to use equal MOS allocation. Go to Course Configuration to enable this setting if desired.")
+        # Set a default allocation with all zeros
+        mos_allocation = {
+            '18A': 0,
+            '18B': 0,
+            '18C': 0,
+            '18D': 0,
+            '18E': 0,
+        }
     
     # Validate dates
     if class_start_date >= class_end_date:
