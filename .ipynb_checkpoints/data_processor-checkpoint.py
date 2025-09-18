@@ -807,205 +807,195 @@ def extract_current_students_from_history(processed_data, cutoff_date=None):
     
     return current_students
 
-def infer_prerequisites(processed_data):
+def analyze_career_paths(processed_data, min_students=3):
     """
-    Infer potential prerequisites based on historical student progression
+    Analyze historical data to identify typical career paths for each MOS
+    
     Args:
         processed_data (pd.DataFrame): Processed training data
+        min_students (int): Minimum number of students required to consider a path valid
+        
     Returns:
-        dict: Dictionary of likely prerequisites for each course
+        dict: Dictionary with career paths and flexible courses for each MOS
     """
-    # Group data by student (SSN)
+    import copy
+    
+    # Group data by student
     student_groups = processed_data.groupby('SSN')
     
-    # Track course sequences and statistics
-    course_sequences = {}
-    total_students_by_course = defaultdict(int)
+    # Store career paths by MOS
+    mos_paths = defaultdict(list)
+    course_frequencies = defaultdict(lambda: defaultdict(int))
+    course_positions = defaultdict(lambda: defaultdict(list))
     
+    # Count of students by MOS
+    mos_student_count = defaultdict(int)
+    
+    # Analyze each student's progression
     for ssn, student_data in student_groups:
-        # Only consider graduated courses
+        # Skip students with no graduation records
+        if not any(student_data['Graduated']):
+            continue
+            
+        # Get the student's MOS
+        if 'TrainingMOS' in student_data.columns:
+            mos = student_data['TrainingMOS'].iloc[0]
+        else:
+            # Skip if MOS is unknown
+            continue
+            
+        # Count this student for their MOS
+        mos_student_count[mos] += 1
+        
+        # Get completed courses in chronological order
         completed_courses = student_data[student_data['Graduated']].sort_values('Cls Start Date')
         
-        # Skip if student completed fewer than 2 courses
+        # Skip if too few courses
         if len(completed_courses) < 2:
             continue
-        
-        # Get course sequence
+            
+        # Extract the sequence of courses
         course_sequence = completed_courses['Course Title'].tolist()
         
-        # Count total students for each course
-        for course in course_sequence:
-            total_students_by_course[course] += 1
+        # Add this sequence to the MOS paths
+        mos_paths[mos].append(course_sequence)
         
-        # Update course sequences
-        for i in range(1, len(course_sequence)):
-            current_course = course_sequence[i]
-            if current_course not in course_sequences:
-                course_sequences[current_course] = {}
-            
-            # Count all previous courses as potential prerequisites
-            for j in range(i):
-                prev_course = course_sequence[j]
-                if prev_course not in course_sequences[current_course]:
-                    course_sequences[current_course][prev_course] = 0
-                course_sequences[current_course][prev_course] += 1
+        # Track course frequencies and positions in sequences
+        for i, course in enumerate(course_sequence):
+            course_frequencies[mos][course] += 1
+            course_positions[mos][course].append(i)
     
-    # Calculate likelihood of prerequisites and identify patterns
-    prerequisites = {}
-    prerequisite_confidence = {}
+    # Process the data to identify typical paths and flexible courses
+    career_paths = {}
     
-    for course, potential_prereqs in course_sequences.items():
-        # Skip if no data for this course
-        if not potential_prereqs:
+    for mos, paths in mos_paths.items():
+        # Skip if too few students for this MOS
+        if mos_student_count[mos] < min_students:
             continue
             
-        # Total number of students who took this course
-        total_students = total_students_by_course[course]
+        # Calculate percentage of students who took each course
+        course_percentages = {}
+        for course, count in course_frequencies[mos].items():
+            course_percentages[course] = count / mos_student_count[mos]
         
-        # Skip if too few students (not enough data)
-        if total_students < 3:
-            continue
+        # Calculate average position for each course
+        avg_positions = {}
+        position_variability = {}
         
-        # Analyze each potential prerequisite
-        prereq_analysis = []
-        for prereq, count in potential_prereqs.items():
-            # Calculate frequency
-            frequency = count / total_students
-            
-            # Categorize the relationship
-            relationship_type = "Unknown"
-            if frequency >= 0.95:
-                relationship_type = "Required"
-            elif frequency >= 0.8:
-                relationship_type = "Strongly Recommended"
-            elif frequency >= 0.5:
-                relationship_type = "Common"
-            elif frequency >= 0.2:
-                relationship_type = "Occasional"
-            
-            # Add to analysis
-            prereq_analysis.append({
-                'prerequisite': prereq,
-                'frequency': frequency,
-                'count': count,
-                'relationship': relationship_type
-            })
+        for course, positions in course_positions[mos].items():
+            avg_positions[course] = sum(positions) / len(positions)
+            # Calculate standard deviation of positions
+            std_dev = np.std(positions) if len(positions) > 1 else 0
+            position_variability[course] = std_dev
         
-        # Sort by frequency
-        prereq_analysis.sort(key=lambda x: x['frequency'], reverse=True)
+        # Identify core courses (taken by most students in consistent order)
+        core_courses = []
+        flexible_courses = []
         
-        # Identify strong prerequisites (courses most students took)
-        strong_prereqs = [p['prerequisite'] for p in prereq_analysis if p['relationship'] in ["Required", "Strongly Recommended"]]
+        for course, percentage in course_percentages.items():
+            # Core courses are taken by at least 70% of students and have low position variability
+            if percentage >= 0.7 and position_variability[course] < 1.5:
+                core_courses.append((course, avg_positions[course]))
+            # Flexible courses are taken by at least 30% of students but have higher position variability
+            elif percentage >= 0.3:
+                flexible_courses.append(course)
         
-        # Identify potential OR relationships
-        or_groups = []
-        remaining_prereqs = [p for p in prereq_analysis if p['relationship'] not in ["Required", "Strongly Recommended"] and p['relationship'] != "Occasional"]
+        # Sort core courses by average position to create the typical path
+        core_courses.sort(key=lambda x: x[1])
+        typical_path = [course for course, _ in core_courses]
         
-        # Look for potential OR relationships among remaining prerequisites
-        while remaining_prereqs:
-            prereq1 = remaining_prereqs.pop(0)
-            or_group = [prereq1['prerequisite']]
-            
-            for prereq2 in remaining_prereqs[:]:
-                # If the two courses together cover almost all students (possible OR relationship)
-                combined_frequency = prereq1['frequency'] + prereq2['frequency']
-                if 0.9 <= combined_frequency <= 1.1 and abs(prereq1['frequency'] - prereq2['frequency']) < 0.3:
-                    or_group.append(prereq2['prerequisite'])
-                    remaining_prereqs.remove(prereq2)
-            
-            if len(or_group) > 1:
-                or_groups.append(or_group)
-        
-        # Create the prerequisite structure
-        prereq_structure = {
-            'prerequisites': {
-                'type': 'AND',
-                'courses': strong_prereqs
-            },
-            'or_prerequisites': or_groups,
-            'analysis': prereq_analysis
+        # Store the results
+        career_paths[mos] = {
+            'typical_path': typical_path,
+            'flexible_courses': flexible_courses,
+            'course_percentages': course_percentages,
+            'student_count': mos_student_count[mos],
+            'avg_positions': avg_positions,
+            'position_variability': position_variability,
+            'all_paths': paths
         }
-        
-        prerequisites[course] = prereq_structure
-        
-        # Calculate overall confidence
-        # Higher when more students took the course and prerequisites are clear
-        num_students_factor = min(1.0, total_students / 20)  # Max out at 20+ students
-        clarity_factor = 1.0 if strong_prereqs else (0.7 if or_groups else 0.4)
-        prerequisite_confidence[course] = num_students_factor * clarity_factor
     
-    return {'prerequisites': prerequisites, 'confidence': prerequisite_confidence}
+    return career_paths
 
-def apply_inferred_prerequisites(course_configs, inferred_prerequisites, confidence_threshold=0.7):
+def apply_career_paths_to_configs(course_configs, edited_paths):
     """
-    Apply inferred prerequisites to course configurations
+    Apply edited career paths to course configurations by setting prerequisites
     
     Args:
         course_configs (dict): Dictionary of course configurations
-        inferred_prerequisites (dict): Dictionary of inferred prerequisites
-        confidence_threshold (float): Minimum confidence to apply prerequisites
-    
+        edited_paths (dict): Dictionary of edited career paths by MOS
+        
     Returns:
         dict: Updated course configurations
         list: List of changes made
     """
+    import copy
+    
     # Make a copy to avoid modifying the original
     updated_configs = copy.deepcopy(course_configs)
     changes_made = []
     
-    # Get prerequisites and confidence
-    prerequisites = inferred_prerequisites.get('prerequisites', {})
-    confidence = inferred_prerequisites.get('confidence', {})
-    
-    for course, prereq_data in prerequisites.items():
-        # Skip if confidence is below threshold
-        if confidence.get(course, 0) < confidence_threshold:
+    # Process each MOS path
+    for mos, path_data in edited_paths.items():
+        typical_path = path_data['typical_path']
+        
+        # Skip if the path is too short
+        if len(typical_path) < 2:
             continue
+        
+        # Update each course in the typical path
+        for i, course in enumerate(typical_path):
+            # Skip if course doesn't exist in configs
+            if course not in updated_configs:
+                continue
             
-        # Only apply to courses that exist in the configuration
-        if course not in updated_configs:
-            continue
-            
-        # Get current prerequisites
-        current_prereqs = []
-        if 'prerequisites' in updated_configs[course]:
-            if isinstance(updated_configs[course]['prerequisites'], list):
-                current_prereqs = updated_configs[course]['prerequisites']
+            # Clear existing prerequisites
+            if 'prerequisites' not in updated_configs[course]:
+                updated_configs[course]['prerequisites'] = {
+                    'type': 'AND',
+                    'courses': []
+                }
+            elif isinstance(updated_configs[course]['prerequisites'], list):
+                updated_configs[course]['prerequisites'] = {
+                    'type': 'AND',
+                    'courses': []
+                }
             else:
-                current_prereqs = updated_configs[course]['prerequisites'].get('courses', [])
-        
-        # Get current OR prerequisites
-        current_or_prereqs = updated_configs[course].get('or_prerequisites', [])
-        
-        # Identify new AND prerequisites
-        new_and_prereqs = [p for p in prereq_data['prerequisites']['courses'] if p not in current_prereqs]
-        
-        # Identify new OR groups
-        new_or_groups = []
-        for or_group in prereq_data['or_prerequisites']:
-            # Check if this group already exists
-            if not any(set(or_group).issubset(set(group)) for group in current_or_prereqs):
-                new_or_groups.append(or_group)
-        
-        # Apply changes if there are any
-        if new_and_prereqs or new_or_groups:
-            # Update AND prerequisites
-            if new_and_prereqs:
-                if isinstance(updated_configs[course]['prerequisites'], list):
-                    updated_configs[course]['prerequisites'] = current_prereqs + new_and_prereqs
-                else:
-                    updated_configs[course]['prerequisites']['courses'] = current_prereqs + new_and_prereqs
+                updated_configs[course]['prerequisites']['courses'] = []
             
-            # Update OR prerequisites
-            if new_or_groups:
-                updated_configs[course]['or_prerequisites'] = current_or_prereqs + new_or_groups
+            # Set new prerequisites based on the path
+            if i > 0:
+                # Previous course in path becomes the prerequisite
+                updated_configs[course]['prerequisites']['courses'] = [typical_path[i-1]]
+                
+                changes_made.append({
+                    'course': course,
+                    'mos': mos,
+                    'prerequisites': [typical_path[i-1]],
+                    'action': 'set_prerequisites'
+                })
             
-            # Record the change
-            changes_made.append({
-                'course': course,
-                'added_prerequisites': new_and_prereqs,
-                'added_or_groups': new_or_groups,
-                'confidence': confidence.get(course, 0)
-            })
+            # Update MOS paths
+            if 'mos_paths' not in updated_configs[course]:
+                updated_configs[course]['mos_paths'] = {
+                    '18A': [],
+                    '18B': [],
+                    '18C': [],
+                    '18D': [],
+                    '18E': []
+                }
+            
+            # Set this course as part of this MOS path
+            if mos in updated_configs[course]['mos_paths']:
+                # This course is in the path for this MOS
+                updated_configs[course]['mos_paths'][mos] = []
+                
+                # Record if this is a new addition
+                if not any(change['course'] == course and change['mos'] == mos and change['action'] == 'added_to_mos_path' for change in changes_made):
+                    changes_made.append({
+                        'course': course,
+                        'mos': mos,
+                        'action': 'added_to_mos_path'
+                    })
     
     return updated_configs, changes_made

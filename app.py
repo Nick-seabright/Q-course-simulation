@@ -7,7 +7,7 @@ import plotly.express as px
 import json
 import copy
 from collections import defaultdict
-from data_processor import process_data, analyze_historical_data, extract_historical_arrival_patterns, extract_historical_mos_distribution, infer_prerequisites, apply_inferred_prerequisites
+from data_processor import process_data, analyze_historical_data, extract_historical_arrival_patterns, extract_historical_mos_distribution, analyze_career_paths, apply_career_paths_to_configs
 from simulation_engine import run_simulation
 from optimization import optimize_schedule
 from utils import ensure_config_compatibility
@@ -752,111 +752,318 @@ def display_config_page():
         with metrics_col3:
             st.metric("Recycle Rate", f"{hist_data.get('recycle_rate', 0):.1%}")
 
-    # Prerequisite Inference feature
-    st.subheader("Prerequisite Inference")
-    st.write("Analyze historical data to infer likely prerequisites for courses.")
+    st.subheader("Career Path Analysis and Editor")
+    st.write("Analyze historical data to identify typical career paths for each MOS, then edit them to your preference.")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        infer_button = st.button("Infer Prerequisites from Historical Data", key="infer_prereqs")
-    with col2:
-        confidence_threshold = st.slider(
-            "Confidence Threshold",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.7,
-            help="Only apply inferred prerequisites with confidence above this threshold"
+    career_path_col1, career_path_col2 = st.columns(2)
+    with career_path_col1:
+        analyze_paths_button = st.button("Analyze Career Paths", key="analyze_paths")
+    with career_path_col2:
+        min_students = st.number_input(
+            "Minimum Students for Valid Path",
+            min_value=1,
+            max_value=20,
+            value=3,
+            help="Require at least this many students to have followed a path for it to be considered valid"
         )
     
-    if infer_button:
+    if analyze_paths_button:
         if 'processed_data' not in st.session_state or st.session_state.processed_data is None:
-            st.warning("Please upload and process data first to infer prerequisites.")
+            st.warning("Please upload and process data first to analyze career paths.")
         else:
-            with st.spinner("Analyzing historical data to infer prerequisites..."):
+            with st.spinner("Analyzing historical data to identify career paths..."):
                 try:
-                    # Infer prerequisites from historical data
-                    inferred_data = infer_prerequisites(st.session_state.processed_data)
+                    # Analyze career paths from historical data
+                    career_paths = analyze_career_paths(st.session_state.processed_data, min_students)
                     
                     # Store in session state
-                    st.session_state.inferred_prerequisites = inferred_data
+                    st.session_state.career_paths = career_paths
                     
-                    # Apply inferred prerequisites to configurations
-                    updated_configs, changes = apply_inferred_prerequisites(
-                        st.session_state.course_configs,
-                        inferred_data,
-                        confidence_threshold
+                    if career_paths:
+                        st.success(f"Successfully analyzed career paths for {len(career_paths)} MOS!")
+                    else:
+                        st.warning("No clear career paths found in the historical data. Try reducing the minimum students requirement.")
+                except Exception as e:
+                    st.error(f"Error analyzing career paths: {e}")
+                    import traceback
+                    st.error(traceback.format_exc())
+    
+    # Display and edit career paths if they exist
+    if 'career_paths' in st.session_state and st.session_state.career_paths:
+        # Make a copy for editing
+        if 'edited_career_paths' not in st.session_state:
+            st.session_state.edited_career_paths = copy.deepcopy(st.session_state.career_paths)
+        
+        career_paths = st.session_state.edited_career_paths
+        
+        # Create tabs for each MOS
+        mos_tabs = st.tabs(list(career_paths.keys()))
+        
+        for i, mos in enumerate(career_paths.keys()):
+            with mos_tabs[i]:
+                path_data = career_paths[mos]
+                
+                # Display statistics
+                st.write(f"Based on data from {path_data['student_count']} students")
+                
+                # Career Path Editor
+                st.write("### Edit Career Path")
+                st.write("Drag courses to reorder them. Add or remove courses as needed.")
+                
+                # Get all courses to populate dropdown
+                all_courses = set()
+                for m, p in career_paths.items():
+                    all_courses.update(p['typical_path'])
+                    all_courses.update(p['flexible_courses'])
+                all_courses = sorted(list(all_courses))
+                
+                # Add course to path
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    new_course = st.selectbox(
+                        "Add Course to Path",
+                        options=[""] + [c for c in all_courses if c not in path_data['typical_path']],
+                        key=f"add_course_{mos}"
+                    )
+                with col2:
+                    add_button = st.button("Add", key=f"add_button_{mos}")
+                
+                if add_button and new_course:
+                    path_data['typical_path'].append(new_course)
+                    st.success(f"Added {new_course} to path")
+                    st.rerun()
+                
+                # Edit the current path
+                path_items = []
+                for j, course in enumerate(path_data['typical_path']):
+                    path_items.append({
+                        "id": j,
+                        "course": course
+                    })
+                
+                # Use a dataframe with drag-and-drop capability
+                edited_df = pd.DataFrame(path_items)
+                
+                if not edited_df.empty:
+                    edited_path = st.data_editor(
+                        edited_df,
+                        column_config={
+                            "id": st.column_config.NumberColumn(
+                                "Position",
+                                help="Drag rows to reorder",
+                                width="small",
+                            ),
+                            "course": st.column_config.TextColumn(
+                                "Course",
+                                width="large",
+                            )
+                        },
+                        hide_index=True,
+                        key=f"path_editor_{mos}",
+                        use_container_width=True,
+                        num_rows="fixed"
                     )
                     
-                    # Show changes
-                    if changes:
-                        st.success(f"Found {len(changes)} courses with inferred prerequisites!")
-                        
-                        with st.expander("View Inferred Prerequisites", expanded=True):
-                            for change in changes:
-                                st.write(f"**{change['course']}** (Confidence: {change['confidence']:.2f})")
-                                
-                                if change['added_prerequisites']:
-                                    st.write("Added required prerequisites:")
-                                    for prereq in change['added_prerequisites']:
-                                        st.write(f"- {prereq}")
-                                
-                                if change['added_or_groups']:
-                                    st.write("Added alternative prerequisites (OR groups):")
-                                    for i, group in enumerate(change['added_or_groups']):
-                                        st.write(f"- Group {i+1}: {' OR '.join(group)}")
-                                
-                                st.write("---")
-                        
-                        # Option to apply changes
-                        if st.button("Apply Inferred Prerequisites"):
-                            st.session_state.course_configs = updated_configs
-                            st.success("Applied inferred prerequisites to course configurations!")
-                            st.rerun()
-                    else:
-                        st.info("No new prerequisites inferred with the current confidence threshold. Try lowering the threshold or adding more historical data.")
-                    
-                    # Option to view detailed analysis
-                    with st.expander("View Detailed Prerequisite Analysis", expanded=False):
-                        for course, prereq_data in inferred_data['prerequisites'].items():
-                            if 'analysis' in prereq_data:
-                                st.write(f"### {course}")
-                                st.write(f"Confidence: {inferred_data['confidence'].get(course, 0):.2f}")
-                                
-                                # Create a dataframe for the analysis
-                                analysis_df = pd.DataFrame(prereq_data['analysis'])
-                                analysis_df['frequency'] = analysis_df['frequency'].apply(lambda x: f"{x:.1%}")
-                                
-                                st.dataframe(analysis_df)
-                                st.write("---")
+                    # Update the path based on the edited dataframe
+                    if len(edited_path) > 0:
+                        # Get the courses in order
+                        ordered_courses = edited_path.sort_values('id')['course'].tolist()
+                        # Update the path
+                        path_data['typical_path'] = ordered_courses
                 
-                except Exception as e:
-                    st.error(f"Error inferring prerequisites: {e}")
-
-    # Visualize prerequisite relationships
-    st.subheader("Prerequisite Relationship Visualization")
-    st.write("Visualize how courses are connected through prerequisites.")
-    
-    if st.button("Show Prerequisite Relationships"):
-        try:
-            # Make sure networkx is installed
-            import networkx as nx
+                # Option to remove courses
+                course_to_remove = st.selectbox(
+                    "Remove Course from Path",
+                    options=[""] + path_data['typical_path'],
+                    key=f"remove_course_{mos}"
+                )
+                
+                if st.button("Remove", key=f"remove_button_{mos}") and course_to_remove:
+                    path_data['typical_path'].remove(course_to_remove)
+                    st.success(f"Removed {course_to_remove} from path")
+                    st.rerun()
+                
+                # Display flexible courses
+                st.write("### Flexible Courses")
+                st.write("These courses don't have a fixed position in the training sequence.")
+                
+                flexible_courses = path_data['flexible_courses']
+                flexible_str = ", ".join(flexible_courses) if flexible_courses else "None"
+                st.write(flexible_str)
+                
+                # Add or remove flexible courses
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Add flexible course
+                    new_flexible = st.selectbox(
+                        "Add Flexible Course",
+                        options=[""] + [c for c in all_courses if c not in flexible_courses and c not in path_data['typical_path']],
+                        key=f"add_flexible_{mos}"
+                    )
+                    
+                    if st.button("Add to Flexible", key=f"add_flexible_button_{mos}") and new_flexible:
+                        path_data['flexible_courses'].append(new_flexible)
+                        st.success(f"Added {new_flexible} as flexible course")
+                        st.rerun()
+                
+                with col2:
+                    # Remove flexible course
+                    remove_flexible = st.selectbox(
+                        "Remove Flexible Course",
+                        options=[""] + flexible_courses,
+                        key=f"remove_flexible_{mos}"
+                    )
+                    
+                    if st.button("Remove from Flexible", key=f"remove_flexible_button_{mos}") and remove_flexible:
+                        path_data['flexible_courses'].remove(remove_flexible)
+                        st.success(f"Removed {remove_flexible} from flexible courses")
+                        st.rerun()
+                
+                # Move between path and flexible
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Move from path to flexible
+                    path_to_flexible = st.selectbox(
+                        "Move from Path to Flexible",
+                        options=[""] + path_data['typical_path'],
+                        key=f"path_to_flexible_{mos}"
+                    )
+                    
+                    if st.button("Move to Flexible", key=f"path_to_flexible_button_{mos}") and path_to_flexible:
+                        path_data['typical_path'].remove(path_to_flexible)
+                        path_data['flexible_courses'].append(path_to_flexible)
+                        st.success(f"Moved {path_to_flexible} to flexible courses")
+                        st.rerun()
+                
+                with col2:
+                    # Move from flexible to path
+                    flexible_to_path = st.selectbox(
+                        "Move from Flexible to Path",
+                        options=[""] + flexible_courses,
+                        key=f"flexible_to_path_{mos}"
+                    )
+                    
+                    if st.button("Move to Path", key=f"flexible_to_path_button_{mos}") and flexible_to_path:
+                        path_data['flexible_courses'].remove(flexible_to_path)
+                        path_data['typical_path'].append(flexible_to_path)
+                        st.success(f"Moved {flexible_to_path} to path")
+                        st.rerun()
+                
+                # Show the current path
+                st.write("### Current Career Path")
+                if path_data['typical_path']:
+                    path_str = " → ".join(path_data['typical_path'])
+                    st.write(path_str)
+                    
+                    # Create a visual representation of the path
+                    try:
+                        fig = go.Figure()
+                        
+                        # Plot nodes for each course in the path
+                        for j, course in enumerate(path_data['typical_path']):
+                            fig.add_trace(go.Scatter(
+                                x=[j],
+                                y=[0],
+                                mode='markers+text',
+                                text=[course],
+                                textposition='top center',
+                                marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
+                                name=course
+                            ))
+                            
+                            # Add arrow to the next course
+                            if j < len(path_data['typical_path']) - 1:
+                                fig.add_annotation(
+                                    x=j+0.5,
+                                    y=0,
+                                    ax=j,
+                                    ay=0,
+                                    xref='x',
+                                    yref='y',
+                                    axref='x',
+                                    ayref='y',
+                                    showarrow=True,
+                                    arrowhead=2,
+                                    arrowsize=1,
+                                    arrowwidth=2,
+                                    arrowcolor='rgba(66, 133, 244, 0.8)'
+                                )
+                        
+                        # Update layout
+                        fig.update_layout(
+                            showlegend=False,
+                            xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
+                            yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
+                            margin=dict(l=20, r=20, t=20, b=20),
+                            height=200,
+                            width=max(600, len(path_data['typical_path']) * 100)
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Error creating visualization: {e}")
+                else:
+                    st.write("No courses in path.")
+        
+        # Apply career paths to configurations
+        st.subheader("Apply Career Paths to Configurations")
+        st.write("This will update course prerequisites based on your edited career paths.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            clear_existing = st.checkbox("Clear existing prerequisites", value=True, 
+                                       help="If checked, existing prerequisites will be cleared before applying the career paths.")
+        
+        with col2:
+            update_mos_paths = st.checkbox("Update MOS paths", value=True,
+                                         help="If checked, each course will be marked as part of the appropriate MOS path.")
+        
+        if st.button("Apply Career Paths to Prerequisites"):
+            # Apply career paths to configurations
+            updated_configs, changes = apply_career_paths_to_configs(
+                st.session_state.course_configs,
+                st.session_state.edited_career_paths
+            )
             
-            # Create the visualization
-            fig = visualize_prerequisites(st.session_state.course_configs)
-            
-            # Display the figure
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Add a note about the visualization
-            st.info("""
-            **How to read this diagram:**
-            - Blue nodes are courses
-            - Blue solid lines indicate required prerequisites (AND)
-            - Red dashed lines indicate alternative prerequisites (OR)
-            - Drag nodes to rearrange the visualization
-            """)
-        except ImportError:
-            st.error("NetworkX library is required for visualization. Install it with: pip install networkx")
+            if changes:
+                st.session_state.career_path_changes = changes
+                st.success(f"Made {len(changes)} updates to course configurations based on career paths!")
+                
+                # Show summary of changes
+                with st.expander("View Changes", expanded=True):
+                    # Count changes by type
+                    change_counts = defaultdict(int)
+                    for change in changes:
+                        change_counts[change['action']] += 1
+                    
+                    # Display counts
+                    st.write("### Changes Summary")
+                    for action, count in change_counts.items():
+                        if action == 'set_prerequisites':
+                            st.write(f"• Set prerequisites for {count} courses")
+                        elif action == 'added_to_mos_path':
+                            st.write(f"• Added {count} courses to MOS paths")
+                    
+                    # Option to see all changes
+                    if st.checkbox("Show all changes"):
+                        for change in changes:
+                            course = change['course']
+                            mos = change['mos']
+                            action = change['action']
+                            
+                            if action == 'set_prerequisites':
+                                prereqs = change['prerequisites']
+                                st.write(f"• Set prerequisites for {course} ({mos}): {', '.join(prereqs)}")
+                            elif action == 'added_to_mos_path':
+                                st.write(f"• Added {course} to {mos} career path")
+                
+                # Option to apply changes
+                if st.button("Confirm and Update Configurations"):
+                    st.session_state.course_configs = updated_configs
+                    st.success("Course configurations updated successfully!")
+                    st.rerun()
+            else:
+                st.info("No changes needed. Course configurations already match the career paths.")
     
     # Save configuration button
     if st.button("Save Configuration"):
