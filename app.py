@@ -534,17 +534,15 @@ def visualize_prerequisites(course_configs: Dict[str, Any]) -> go.Figure:
     """
     try:
         import networkx as nx
-        
         # Create a directed graph
         G = nx.DiGraph()
-        
         # Add nodes (courses)
         for course in course_configs:
             G.add_node(course)
         
         # Add edges (prerequisites)
         for course, config in course_configs.items():
-            # AND prerequisites
+            # Check AND prerequisites
             if 'prerequisites' in config:
                 prereqs = []
                 if isinstance(config['prerequisites'], list):
@@ -556,17 +554,35 @@ def visualize_prerequisites(course_configs: Dict[str, Any]) -> go.Figure:
                     if prereq in course_configs:  # Only add if both are in the configs
                         G.add_edge(prereq, course, type='AND')
             
-            # OR prerequisites
-            if 'or_prerequisites' in config:
+            # Check OR prerequisites
+            if 'or_prerequisites' in config and config['or_prerequisites']:
                 for i, or_group in enumerate(config['or_prerequisites']):
+                    if not or_group:  # Skip empty groups
+                        continue
                     # Create a virtual node for the OR group
                     or_node = f"OR_{course}_{i}"
                     G.add_node(or_node, is_virtual=True)
                     G.add_edge(or_node, course, type='OR')
-                    
                     for prereq in or_group:
                         if prereq in course_configs:  # Only add if both are in the configs
                             G.add_edge(prereq, or_node, type='OR_member')
+            
+            # Check MOS-specific paths
+            if 'mos_paths' in config:
+                for mos, mos_prereqs in config['mos_paths'].items():
+                    for prereq in mos_prereqs:
+                        if prereq in course_configs:  # Only add if both are in the configs
+                            G.add_edge(prereq, course, type='MOS', mos=mos)
+        
+        # If the graph is empty, return a simple message
+        if len(G.nodes()) == 0:
+            fig = go.Figure()
+            fig.add_annotation(
+                text="No prerequisite relationships found",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False
+            )
+            return fig
         
         # Use a layout that shows the hierarchy
         pos = nx.spring_layout(G, k=0.3, iterations=50)
@@ -590,7 +606,24 @@ def visualize_prerequisites(course_configs: Dict[str, Any]) -> go.Figure:
                 line_color = 'rgba(219, 68, 55, 0.8)'  # Red for OR
                 line_width = 2
                 line_dash = 'dash'
-            else:  # OR_member
+            elif edge_type == 'MOS':
+                # Different colors for different MOS paths
+                mos = edge[2].get('mos', '')
+                if mos == '18A':
+                    line_color = 'rgba(76, 175, 80, 0.8)'  # Green for 18A
+                elif mos == '18B':
+                    line_color = 'rgba(255, 152, 0, 0.8)'  # Orange for 18B
+                elif mos == '18C':
+                    line_color = 'rgba(156, 39, 176, 0.8)'  # Purple for 18C
+                elif mos == '18D':
+                    line_color = 'rgba(3, 169, 244, 0.8)'  # Light blue for 18D
+                elif mos == '18E':
+                    line_color = 'rgba(255, 87, 34, 0.8)'  # Deep orange for 18E
+                else:
+                    line_color = 'rgba(189, 189, 189, 0.8)'  # Grey for unknown
+                line_width = 1.5
+                line_dash = 'dot'
+            else:  # OR_member or default
                 line_color = 'rgba(219, 68, 55, 0.5)'  # Light red for OR members
                 line_width = 1
                 line_dash = 'dot'
@@ -619,7 +652,6 @@ def visualize_prerequisites(course_configs: Dict[str, Any]) -> go.Figure:
             
             # Check if it's a virtual node
             is_virtual = G.nodes[node].get('is_virtual', False)
-            
             if is_virtual:
                 # Format for OR group nodes
                 node_text.append("OR")
@@ -663,10 +695,8 @@ def visualize_prerequisites(course_configs: Dict[str, Any]) -> go.Figure:
         )
         
         return fig
-    
     except Exception as e:
         print(f"Error creating prerequisite visualization: {e}")
-        
         # Return a simple error figure
         fig = go.Figure()
         fig.add_annotation(
@@ -700,9 +730,9 @@ def display_career_path_builder():
     # Add General path option
     if 'General' not in st.session_state.custom_paths:
         st.session_state.custom_paths['General'] = {
-            'path': [], 
-            'flexible_courses': [], 
-            'or_groups': [], 
+            'path': [],
+            'flexible_courses': [],
+            'or_groups': [],
             'flexible_constraints': {},
             'path_order': []  # New field to store the order of elements (courses and OR groups)
         }
@@ -725,6 +755,7 @@ def display_career_path_builder():
     if not all_courses and 'data' in st.session_state and st.session_state.data is not None:
         data_courses = list(st.session_state.data['Course Title'].unique())
         all_courses.extend(data_courses)
+    
     # Remove duplicates and sort
     all_courses = sorted(list(set(all_courses)))
     
@@ -758,11 +789,9 @@ def display_career_path_builder():
             if 'or_groups' not in path_data:
                 path_data['or_groups'] = []
                 or_groups = []
-            
             if 'flexible_constraints' not in path_data:
                 path_data['flexible_constraints'] = {}
                 flexible_constraints = {}
-            
             if 'path_order' not in path_data:
                 # Initialize path_order based on current_path if it's empty
                 path_data['path_order'] = [{'type': 'course', 'content': course} for course in current_path]
@@ -783,7 +812,6 @@ def display_career_path_builder():
                 # Get courses that aren't already in the path
                 used_courses = current_path + [course for group in or_groups for course in group] + flexible_courses
                 available_courses = [c for c in all_courses if c not in used_courses]
-                
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     if not available_courses:
@@ -795,7 +823,6 @@ def display_career_path_builder():
                             options=[""] + available_courses,
                             key=f"add_course_{mos}"
                         )
-                
                 with col2:
                     add_button = st.button("Add Course", key=f"add_button_{mos}")
                     if add_button and new_course:
@@ -812,7 +839,6 @@ def display_career_path_builder():
             # Tab for adding an OR group
             with add_element_tabs[1]:
                 st.write("Create a new OR group (students must take ONE course from the group)")
-                
                 # Create a temporary OR group in session state if it doesn't exist
                 if f'temp_or_group_{mos}' not in st.session_state:
                     st.session_state[f'temp_or_group_{mos}'] = []
@@ -842,7 +868,7 @@ def display_career_path_builder():
                     with checkbox_cols[col_idx]:
                         # Use a unique key for each checkbox
                         selected = st.checkbox(
-                            course, 
+                            course,
                             value=st.session_state[f'or_group_selections_{mos}'].get(course, False),
                             key=f"or_check_{mos}_{course.replace(' ', '_')}"
                         )
@@ -873,7 +899,6 @@ def display_career_path_builder():
             # Display and edit the current path order
             if path_order:
                 st.write("### Current Path Order")
-                
                 # Display path with positions
                 path_items = []
                 for pos, item in enumerate(path_order):
@@ -901,7 +926,6 @@ def display_career_path_builder():
                 # Reordering controls
                 st.write("### Reorder Path Elements")
                 col1, col2, col3 = st.columns([3, 2, 1])
-                
                 with col1:
                     # Create options that show both type and content
                     reorder_options = []
@@ -920,7 +944,6 @@ def display_career_path_builder():
                         options=reorder_options,
                         key=f"move_element_{mos}"
                     )
-                    
                     # Extract position from selection
                     selected_pos = int(selected_item.split(':')[0].replace('Pos ', '')) - 1
                 
@@ -955,7 +978,6 @@ def display_career_path_builder():
                     options=reorder_options,
                     key=f"remove_element_{mos}"
                 )
-                
                 # Extract position from selection
                 remove_pos = int(element_to_remove.split(':')[0].replace('Pos ', '')) - 1
                 
@@ -988,72 +1010,60 @@ def display_career_path_builder():
                     st.session_state.custom_paths[mos]['path_order'] = path_order
                     st.success("Element removed from path")
                     st.rerun()
-            
+
             # OR Groups Section - Edit existing groups
             if or_groups:
                 st.write("### Edit OR Groups")
                 for i, group in enumerate(or_groups):
                     st.write(f"**OR Group {i+1}:**")
-                    
                     # Create a unique key for this group's selection state
                     group_key = f"or_edit_selections_{mos}_{i}"
-                    
                     # Initialize selection state for this group if needed
                     if group_key not in st.session_state:
                         st.session_state[group_key] = {
-                            course: (course in group) for course in all_courses 
+                            course: (course in group) for course in all_courses
                             if course not in current_path and (course in group or course not in [c for g in or_groups for c in g if g != group])
                         }
-                    
                     # Get available courses for this group
-                    edit_options = [c for c in all_courses 
+                    edit_options = [c for c in all_courses
                                   if c not in current_path and (c in group or c not in [c for g in or_groups for c in g if g != group])]
-                    
                     # Update available options
                     for course in edit_options:
                         if course not in st.session_state[group_key]:
                             st.session_state[group_key][course] = course in group
-                    
                     # Display checkboxes in a grid layout
                     st.write("Select courses for this OR group:")
-                    
                     # Create columns for the checkboxes
                     cols = st.columns([3, 1])
                     with cols[0]:
                         # Use 3 columns for the checkboxes
                         checkbox_cols = st.columns(3)
-                        
                         # Display checkboxes for each available course
                         for j, course in enumerate(sorted(edit_options)):
                             col_idx = j % 3
                             with checkbox_cols[col_idx]:
                                 # Use a unique key for each checkbox
                                 selected = st.checkbox(
-                                    course, 
+                                    course,
                                     value=st.session_state[group_key].get(course, course in group),
                                     key=f"or_edit_{mos}_{i}_{course.replace(' ', '_')}"
                                 )
                                 # Update the selection state
                                 st.session_state[group_key][course] = selected
-                        
                         # Build the list of selected courses
                         updated_group = [course for course, selected in st.session_state[group_key].items() if selected]
-                        
                         # Show the current selection
                         if updated_group:
                             st.success(f"Selected {len(updated_group)} courses")
-                        
                         # Update the group
                         or_groups[i] = updated_group
                         # Update the session state immediately
                         st.session_state.custom_paths[mos]['or_groups'] = or_groups
-                    
                     with cols[1]:
                         # Option to delete this group
                         if st.button(f"Delete Group {i+1}", key=f"delete_or_group_{mos}_{i}"):
                             # Remove from or_groups
                             or_groups.pop(i)
-                            
                             # Remove from path_order and adjust indices
                             new_path_order = []
                             for item in path_order:
@@ -1072,7 +1082,6 @@ def display_career_path_builder():
                                 else:
                                     # Keep courses as is
                                     new_path_order.append(item)
-                            
                             # Update session state
                             st.session_state.custom_paths[mos]['or_groups'] = or_groups
                             st.session_state.custom_paths[mos]['path_order'] = new_path_order
@@ -1089,7 +1098,6 @@ def display_career_path_builder():
                 # Get courses that aren't already in any path
                 used_courses = current_path + [course for group in or_groups for course in group] + flexible_courses
                 available_flex_courses = [c for c in all_courses if c not in used_courses]
-                
                 if not available_flex_courses:
                     st.warning("All courses have been added to either the path or flexible courses.")
                     new_flexible = ""
@@ -1117,22 +1125,18 @@ def display_career_path_builder():
             if flexible_courses:
                 st.write("### Flexible Course Constraints")
                 st.write("Set timing constraints for when flexible courses can be taken:")
-                
                 for i, course in enumerate(flexible_courses):
                     st.write(f"**{course}**")
                     # Create constraint columns
                     constraint_cols = st.columns(2)
-                    
                     # Initialize constraints if they don't exist
                     if course not in flexible_constraints:
                         flexible_constraints[course] = {
                             'must_be_before': [],
                             'must_be_after': []
                         }
-                    
                     # Extract path courses for constraints (both regular courses and courses from OR groups)
                     path_courses = current_path.copy()
-                    
                     # Before constraints
                     with constraint_cols[0]:
                         before_constraints = flexible_constraints[course].get('must_be_before', [])
@@ -1143,7 +1147,6 @@ def display_career_path_builder():
                             key=f"before_{mos}_{i}"
                         )
                         flexible_constraints[course]['must_be_before'] = selected_before
-                    
                     # After constraints
                     with constraint_cols[1]:
                         after_constraints = flexible_constraints[course].get('must_be_after', [])
@@ -1154,7 +1157,6 @@ def display_career_path_builder():
                             key=f"after_{mos}_{i}"
                         )
                         flexible_constraints[course]['must_be_after'] = selected_after
-                
                 # Save flexible constraints immediately
                 st.session_state.custom_paths[mos]['flexible_constraints'] = flexible_constraints
                 
@@ -1186,7 +1188,6 @@ def display_career_path_builder():
             # Show the current path visualization
             if path_order or flexible_courses:
                 st.write("### Career Path Visualization")
-                
                 # Create a Plotly figure for the visualization
                 fig = go.Figure()
                 
@@ -1202,7 +1203,6 @@ def display_career_path_builder():
                 for j, item in enumerate(path_order):
                     x_pos = j * x_spacing  # Use wider spacing for better readability
                     item_type = item['type']
-                    
                     if item_type == 'course':
                         course = item['content']
                         # Truncate long course names for display
@@ -1220,12 +1220,10 @@ def display_career_path_builder():
                             marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
                             name=course
                         ))
-                        
                     elif item_type == 'or_group':
                         group_idx = item['content']
                         if group_idx < len(or_groups):
                             group_courses = or_groups[group_idx]
-                            
                             # Add a special marker for the OR group in the main path
                             fig.add_trace(go.Scatter(
                                 x=[x_pos],
@@ -1308,7 +1306,6 @@ def display_career_path_builder():
                 for f_idx, course in enumerate(flexible_courses):
                     # Stagger flexible courses horizontally for better spacing
                     flex_x = f_idx * 3  # Use wider spacing for flexible courses
-                    
                     # Truncate long course names
                     display_name = course if len(course) < 25 else course[:22] + "..."
                     
@@ -1376,7 +1373,7 @@ def display_career_path_builder():
                                     )
                 
                 # Calculate appropriate chart dimensions
-                chart_width = max(800, len(path_order) * x_spacing * 50)  # Wider chart for better spacing
+                chart_width = max(800, len(path_order) * x_spacing + 50)  # Wider chart for better spacing
                 chart_height = max(400, 200 + len(or_groups) * 80 + (1 if flexible_courses else 0) * 100)
                 
                 # Calculate appropriate y-axis range to fit all elements
@@ -1387,14 +1384,14 @@ def display_career_path_builder():
                 fig.update_layout(
                     showlegend=False,
                     xaxis=dict(
-                        showticklabels=False, 
-                        zeroline=False, 
+                        showticklabels=False,
+                        zeroline=False,
                         showgrid=False,
                         range=[-1, len(path_order) * x_spacing + 1]  # Ensure x-axis has enough space
                     ),
                     yaxis=dict(
-                        showticklabels=False, 
-                        zeroline=False, 
+                        showticklabels=False,
+                        zeroline=False,
                         showgrid=False,
                         range=[min_y, max_y]  # Set appropriate y-axis range
                     ),
@@ -1423,7 +1420,6 @@ def display_career_path_builder():
                             if group_idx < len(or_groups):
                                 group_courses = or_groups[group_idx]
                                 path_str.append(f"[OR Group {group_idx+1}: {' OR '.join(group_courses)}]")
-                    
                     if path_str:
                         st.write(" → ".join(path_str))
                     else:
@@ -1436,12 +1432,10 @@ def display_career_path_builder():
                             if course in flexible_constraints:
                                 before = flexible_constraints[course].get('must_be_before', [])
                                 after = flexible_constraints[course].get('must_be_after', [])
-                                
                                 if after:
                                     constraints_text.append(f"After: {', '.join(after)}")
                                 if before:
                                     constraints_text.append(f"Before: {', '.join(before)}")
-                            
                             constraint_str = f" ({' & '.join(constraints_text)})" if constraints_text else ""
                             st.write(f"• {course}{constraint_str}")
             else:
@@ -1457,18 +1451,24 @@ def display_career_path_builder():
     with col2:
         update_mos_paths = st.checkbox("Update MOS paths", value=True,
                                      help="If checked, each course will be marked as part of the appropriate MOS path.")
+    
     if st.button("Apply Career Paths to Prerequisites"):
-        # Check if we have any courses defined in the career paths
+        # Collect all courses from career paths
         all_path_courses = set()
         for mos, path_data in st.session_state.custom_paths.items():
-            all_path_courses.update(path_data.get('path', []))
-            all_path_courses.update(path_data.get('flexible_courses', []))
-            for group in path_data.get('or_groups', []):
+            path = path_data.get('path', [])
+            flexible = path_data.get('flexible_courses', [])
+            groups = path_data.get('or_groups', [])
+            
+            all_path_courses.update(path)
+            all_path_courses.update(flexible)
+            for group in groups:
                 all_path_courses.update(group)
         
         if not all_path_courses:
             st.error("No courses defined in any career paths. Please add courses to your career paths first.")
         elif 'course_configs' not in st.session_state:
+            # Initialize course_configs if it doesn't exist
             st.session_state.course_configs = {}
             # Initialize course configs for all courses in the career paths
             for course in all_path_courses:
@@ -1539,11 +1539,25 @@ def display_career_path_builder():
                                                 new_prerequisites[or_course] = or_groups[prev_group_idx]
                     # Update the path in the custom_paths
                     st.session_state.custom_paths[mos]['path'] = new_path
+                
+                # Print debug info for troubleshooting
+                st.write(f"Debug: Processing {len(st.session_state.custom_paths)} career paths")
+                st.write(f"Debug: Found {len(all_path_courses)} unique courses across all paths")
+                st.write(f"Debug: Created {len(st.session_state.course_configs)} course configurations")
+                
                 # Apply the updated custom paths to configurations
+                from utils import apply_custom_paths_to_configs
+                import copy
+                
+                # Make a deep copy to avoid reference issues
+                configs_copy = copy.deepcopy(st.session_state.course_configs)
+                paths_copy = copy.deepcopy(st.session_state.custom_paths)
+                
                 updated_configs, changes = apply_custom_paths_to_configs(
-                    st.session_state.course_configs,
-                    st.session_state.custom_paths
+                    configs_copy,
+                    paths_copy
                 )
+                
                 if changes:
                     st.session_state.career_path_changes = changes
                     st.success(f"Made {len(changes)} updates to course configurations based on career paths!")
@@ -1568,8 +1582,10 @@ def display_career_path_builder():
                                 st.write(f"• Set {count} flexible course constraints")
                             elif action == 'added_flexible_as_prerequisite':
                                 st.write(f"• Added {count} flexible courses as prerequisites")
+                        
                         # Option to see all changes
-                        if st.checkbox("Show all changes"):
+                        show_all_changes = st.checkbox("Show all changes", key="show_all_changes_checkbox")
+                        if show_all_changes:
                             for change in changes:
                                 course = change['course']
                                 mos = change['mos']
@@ -1590,9 +1606,16 @@ def display_career_path_builder():
                                 elif action == 'added_flexible_as_prerequisite':
                                     prereq = change['prerequisite_added']
                                     st.write(f"• Added flexible course {prereq} as prerequisite for {course} ({mos})")
+                    
                     # Option to apply changes
-                    if st.button("Confirm and Update Configurations"):
-                        st.session_state.course_configs = updated_configs
+                    confirm_button_key = f"confirm_update_configs_{datetime.datetime.now().timestamp()}"
+                    if st.button("Confirm and Update Configurations", key=confirm_button_key):
+                        # Deep copy to ensure we're not keeping references
+                        st.session_state.course_configs = copy.deepcopy(updated_configs)
+                        # Print for debugging
+                        print(f"Updated course_configs in session state. Now has {len(st.session_state.course_configs)} courses.")
+                        # Set a flag to indicate changes were applied
+                        st.session_state.configs_updated = True
                         st.success("Course configurations updated successfully!")
                         st.rerun()
                 else:
@@ -1601,9 +1624,36 @@ def display_career_path_builder():
                 st.error(f"Error applying career paths: {str(e)}")
                 import traceback
                 st.error(traceback.format_exc())
-        
         else:
             try:
+                # Make sure all courses from career paths have configurations
+                for course in all_path_courses:
+                    if course not in st.session_state.course_configs:
+                        st.session_state.course_configs[course] = {
+                            'prerequisites': {
+                                'type': 'AND',
+                                'courses': []
+                            },
+                            'or_prerequisites': [],
+                            'mos_paths': {
+                                '18A': [],
+                                '18B': [],
+                                '18C': [],
+                                '18D': [],
+                                '18E': []
+                            },
+                            'required_for_all_mos': False,
+                            'max_capacity': 50,  # Default values
+                            'classes_per_year': 4,
+                            'reserved_seats': {
+                                'OF': 0,
+                                'ADE': 0,
+                                'NG': 0
+                            },
+                            'officer_enlisted_ratio': None,
+                            'use_even_mos_ratio': False
+                        }
+                
                 # First, convert path_order structure to the format expected by apply_custom_paths_to_configs
                 for mos, path_data in st.session_state.custom_paths.items():
                     path_order = path_data.get('path_order', [])
@@ -1644,39 +1694,39 @@ def display_career_path_builder():
                     # Update the path in the custom_paths
                     st.session_state.custom_paths[mos]['path'] = new_path
                 
-                # Make sure course configs exist for all courses in the career paths
-                for course in all_path_courses:
-                    if course not in st.session_state.course_configs:
-                        st.session_state.course_configs[course] = {
-                            'prerequisites': {
-                                'type': 'AND',
-                                'courses': []
-                            },
-                            'or_prerequisites': [],
-                            'mos_paths': {
-                                '18A': [],
-                                '18B': [],
-                                '18C': [],
-                                '18D': [],
-                                '18E': []
-                            },
-                            'required_for_all_mos': False,
-                            'max_capacity': 50,  # Default values
-                            'classes_per_year': 4,
-                            'reserved_seats': {
-                                'OF': 0,
-                                'ADE': 0,
-                                'NG': 0
-                            },
-                            'officer_enlisted_ratio': None,
-                            'use_even_mos_ratio': False
-                        }
+                # Print debug info for troubleshooting
+                st.write(f"Debug: Processing {len(st.session_state.custom_paths)} career paths")
+                st.write(f"Debug: Found {len(all_path_courses)} unique courses across all paths")
+                st.write(f"Debug: Working with {len(st.session_state.course_configs)} course configurations")
+                
+                # Clear existing prerequisites if requested
+                if clear_existing:
+                    for course, config in st.session_state.course_configs.items():
+                        if 'prerequisites' in config:
+                            if isinstance(config['prerequisites'], dict):
+                                config['prerequisites']['courses'] = []
+                            else:
+                                config['prerequisites'] = {
+                                    'type': 'AND',
+                                    'courses': []
+                                }
+                        if 'or_prerequisites' in config:
+                            config['or_prerequisites'] = []
+                    st.write("Debug: Cleared existing prerequisites")
                 
                 # Apply the updated custom paths to configurations
+                from utils import apply_custom_paths_to_configs
+                import copy
+                
+                # Make a deep copy to avoid reference issues
+                configs_copy = copy.deepcopy(st.session_state.course_configs)
+                paths_copy = copy.deepcopy(st.session_state.custom_paths)
+                
                 updated_configs, changes = apply_custom_paths_to_configs(
-                    st.session_state.course_configs,
-                    st.session_state.custom_paths
+                    configs_copy,
+                    paths_copy
                 )
+                
                 if changes:
                     st.session_state.career_path_changes = changes
                     st.success(f"Made {len(changes)} updates to course configurations based on career paths!")
@@ -1701,8 +1751,10 @@ def display_career_path_builder():
                                 st.write(f"• Set {count} flexible course constraints")
                             elif action == 'added_flexible_as_prerequisite':
                                 st.write(f"• Added {count} flexible courses as prerequisites")
+                        
                         # Option to see all changes
-                        if st.checkbox("Show all changes"):
+                        show_all_changes = st.checkbox("Show all changes", key="show_all_changes_checkbox")
+                        if show_all_changes:
                             for change in changes:
                                 course = change['course']
                                 mos = change['mos']
@@ -1723,11 +1775,31 @@ def display_career_path_builder():
                                 elif action == 'added_flexible_as_prerequisite':
                                     prereq = change['prerequisite_added']
                                     st.write(f"• Added flexible course {prereq} as prerequisite for {course} ({mos})")
+                    
                     # Option to apply changes
-                    if st.button("Confirm and Update Configurations"):
-                        st.session_state.course_configs = updated_configs
+                    confirm_button_key = f"confirm_update_configs_{datetime.datetime.now().timestamp()}"
+                    if st.button("Confirm and Update Configurations", key=confirm_button_key):
+                        # Deep copy to ensure we're not keeping references
+                        st.session_state.course_configs = copy.deepcopy(updated_configs)
+                        # Print for debugging
+                        print(f"Updated course_configs in session state. Now has {len(st.session_state.course_configs)} courses.")
+                        # Set a flag to indicate changes were applied
+                        st.session_state.configs_updated = True
                         st.success("Course configurations updated successfully!")
                         st.rerun()
+                    
+                    # Display the configuration state for debugging
+                    with st.expander("Debug: Configuration State", expanded=False):
+                        st.write(f"Original configs: {len(configs_copy)} courses")
+                        st.write(f"Updated configs: {len(updated_configs)} courses")
+                        # Check for specific courses
+                        if all_path_courses:
+                            sample_course = next(iter(all_path_courses))
+                            st.write(f"Sample course: {sample_course}")
+                            if sample_course in configs_copy:
+                                st.write("Original config:", configs_copy[sample_course])
+                            if sample_course in updated_configs:
+                                st.write("Updated config:", updated_configs[sample_course])
                 else:
                     st.info("No changes needed. Course configurations already match the career paths.")
             except Exception as e:

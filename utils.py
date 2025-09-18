@@ -1214,15 +1214,13 @@ def check_prerequisite_order(schedule: List[Dict[str, Any]], course_configs: Dic
     
     return violations
 
-def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]], 
+def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
                                 custom_paths: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Apply custom career paths to course configurations by setting prerequisites
-    
     Args:
         course_configs: Dictionary of course configurations
         custom_paths: Dictionary of custom career paths by MOS
-        
     Returns:
         Updated course configurations and list of changes made
     """
@@ -1230,23 +1228,44 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
     # Make a copy to avoid modifying the original
     updated_configs = copy.deepcopy(course_configs)
     changes_made = []
-    
     # Process each MOS path
     for mos, path_data in custom_paths.items():
         typical_path = path_data.get('path', [])
         flexible_courses = path_data.get('flexible_courses', [])
         or_groups = path_data.get('or_groups', []) if 'or_groups' in path_data else []
         flexible_constraints = path_data.get('flexible_constraints', {}) if 'flexible_constraints' in path_data else {}
-        
         # Skip if the path is empty
         if not typical_path and not flexible_courses and not or_groups:
             continue
-        
         # Process the main path to set prerequisites
         for i, course in enumerate(typical_path):
             # Skip if course doesn't exist in configs
             if course not in updated_configs:
-                continue
+                # Create a basic configuration for this course
+                updated_configs[course] = {
+                    'prerequisites': {
+                        'type': 'AND',
+                        'courses': []
+                    },
+                    'or_prerequisites': [],
+                    'mos_paths': {
+                        '18A': [],
+                        '18B': [],
+                        '18C': [],
+                        '18D': [],
+                        '18E': []
+                    },
+                    'required_for_all_mos': False,
+                    'max_capacity': 50,
+                    'classes_per_year': 4,
+                    'reserved_seats': {
+                        'OF': 0,
+                        'ADE': 0,
+                        'NG': 0
+                    },
+                    'officer_enlisted_ratio': None,
+                    'use_even_mos_ratio': False
+                }
             
             # Ensure prerequisites structure exists
             if 'prerequisites' not in updated_configs[course]:
@@ -1257,7 +1276,7 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
             elif isinstance(updated_configs[course]['prerequisites'], list):
                 updated_configs[course]['prerequisites'] = {
                     'type': 'AND',
-                    'courses': []
+                    'courses': updated_configs[course]['prerequisites']
                 }
             
             # Set new prerequisites based on the path
@@ -1297,25 +1316,68 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
         for group_idx, group in enumerate(or_groups):
             if not group:  # Skip empty groups
                 continue
+            
+            # First, make sure all courses in the OR group have configurations
+            for or_course in group:
+                if or_course not in updated_configs:
+                    # Create a basic configuration for this course
+                    updated_configs[or_course] = {
+                        'prerequisites': {
+                            'type': 'AND',
+                            'courses': []
+                        },
+                        'or_prerequisites': [],
+                        'mos_paths': {
+                            '18A': [],
+                            '18B': [],
+                            '18C': [],
+                            '18D': [],
+                            '18E': []
+                        },
+                        'required_for_all_mos': False,
+                        'max_capacity': 50,
+                        'classes_per_year': 4,
+                        'reserved_seats': {
+                            'OF': 0,
+                            'ADE': 0,
+                            'NG': 0
+                        },
+                        'officer_enlisted_ratio': None,
+                        'use_even_mos_ratio': False
+                    }
                 
+                # Update MOS paths for OR group courses
+                if mos != 'General' and mos in updated_configs[or_course]['mos_paths']:
+                    # This course is in the path for this MOS
+                    updated_configs[or_course]['mos_paths'][mos] = []
+                    # Record if this is a new addition
+                    if not any(change['course'] == or_course and change['mos'] == mos and change['action'] == 'added_to_mos_path' for change in changes_made):
+                        changes_made.append({
+                            'course': or_course,
+                            'mos': mos,
+                            'action': 'added_to_mos_path'
+                        })
+            
             # Find courses in the path that come after this OR group
             for i, course in enumerate(typical_path):
                 # Skip if course doesn't exist in configs
                 if course not in updated_configs:
                     continue
                 
-                # Determine if this course comes after any course in the OR group
-                or_group_in_path = False
-                max_group_position = -1
+                # Determine if this OR group comes before this course in the path order
+                path_order = path_data.get('path_order', [])
+                course_pos = -1
+                or_group_pos = -1
                 
-                for or_course in group:
-                    if or_course in typical_path:
-                        or_position = typical_path.index(or_course)
-                        max_group_position = max(max_group_position, or_position)
-                        or_group_in_path = True
+                # Find positions in path_order
+                for pos, item in enumerate(path_order):
+                    if item['type'] == 'course' and item['content'] == course:
+                        course_pos = pos
+                    elif item['type'] == 'or_group' and item['content'] == group_idx:
+                        or_group_pos = pos
                 
-                # If this course comes after the OR group, add the group as a prerequisite
-                if or_group_in_path and i > max_group_position:
+                # If OR group comes before course, add as prerequisite
+                if or_group_pos != -1 and course_pos != -1 and or_group_pos < course_pos:
                     # Ensure or_prerequisites structure exists
                     if 'or_prerequisites' not in updated_configs[course]:
                         updated_configs[course]['or_prerequisites'] = []
@@ -1334,7 +1396,31 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
         for flex_course in flexible_courses:
             # Skip if course doesn't exist in configs
             if flex_course not in updated_configs:
-                continue
+                # Create a basic configuration for this course
+                updated_configs[flex_course] = {
+                    'prerequisites': {
+                        'type': 'AND',
+                        'courses': []
+                    },
+                    'or_prerequisites': [],
+                    'mos_paths': {
+                        '18A': [],
+                        '18B': [],
+                        '18C': [],
+                        '18D': [],
+                        '18E': []
+                    },
+                    'required_for_all_mos': False,
+                    'max_capacity': 50,
+                    'classes_per_year': 4,
+                    'reserved_seats': {
+                        'OF': 0,
+                        'ADE': 0,
+                        'NG': 0
+                    },
+                    'officer_enlisted_ratio': None,
+                    'use_even_mos_ratio': False
+                }
             
             # Update MOS paths
             if 'mos_paths' not in updated_configs[flex_course]:
@@ -1361,7 +1447,6 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
             # Process flexible course constraints
             if flex_course in flexible_constraints:
                 constraints = flexible_constraints[flex_course]
-                
                 # Process "must be after" constraints (prerequisites for the flexible course)
                 after_courses = constraints.get('must_be_after', [])
                 if after_courses:
@@ -1374,7 +1459,7 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
                     elif isinstance(updated_configs[flex_course]['prerequisites'], list):
                         updated_configs[flex_course]['prerequisites'] = {
                             'type': 'AND',
-                            'courses': []
+                            'courses': updated_configs[flex_course]['prerequisites']
                         }
                     
                     # Set the prerequisites
@@ -1390,7 +1475,31 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
                 before_courses = constraints.get('must_be_before', [])
                 for before_course in before_courses:
                     if before_course not in updated_configs:
-                        continue
+                        # Create a basic config for this course
+                        updated_configs[before_course] = {
+                            'prerequisites': {
+                                'type': 'AND',
+                                'courses': []
+                            },
+                            'or_prerequisites': [],
+                            'mos_paths': {
+                                '18A': [],
+                                '18B': [],
+                                '18C': [],
+                                '18D': [],
+                                '18E': []
+                            },
+                            'required_for_all_mos': False,
+                            'max_capacity': 50,
+                            'classes_per_year': 4,
+                            'reserved_seats': {
+                                'OF': 0,
+                                'ADE': 0,
+                                'NG': 0
+                            },
+                            'officer_enlisted_ratio': None,
+                            'use_even_mos_ratio': False
+                        }
                     
                     # Ensure prerequisites structure exists
                     if 'prerequisites' not in updated_configs[before_course]:
@@ -1401,7 +1510,7 @@ def apply_custom_paths_to_configs(course_configs: Dict[str, Dict[str, Any]],
                     elif isinstance(updated_configs[before_course]['prerequisites'], list):
                         updated_configs[before_course]['prerequisites'] = {
                             'type': 'AND',
-                            'courses': []
+                            'courses': updated_configs[before_course]['prerequisites']
                         }
                     
                     # Add the flexible course as a prerequisite
