@@ -1149,7 +1149,7 @@ def display_career_path_builder():
                     # Add to list with position
                     or_groups_with_positions.append((g_idx, group, position))
                 
-                # Sort OR groups by position
+                # Sort OR groups by position for display order only (vertical positioning)
                 or_groups_with_positions.sort(key=lambda x: x[2])
                 
                 # Plot OR groups in order
