@@ -7,7 +7,7 @@ import plotly.express as px
 import json
 import copy
 from collections import defaultdict
-from data_processor import process_data, analyze_historical_data, extract_historical_arrival_patterns, extract_historical_mos_distribution
+from data_processor import process_data, analyze_historical_data, extract_historical_arrival_patterns, extract_historical_mos_distribution, infer_prerequisites, apply_inferred_prerequisites
 from simulation_engine import run_simulation
 from optimization import optimize_schedule
 from utils import ensure_config_compatibility
