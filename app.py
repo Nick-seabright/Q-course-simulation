@@ -935,12 +935,9 @@ def display_career_path_builder():
                     updated_group = st.multiselect(
                         f"Select courses for Group {i+1}:",
                         options=available_or_courses,
-                        default=st.session_state[group_key],
+                        default=group,  # Use the actual group directly, not session state
                         key=group_key
                     )
-                    
-                    # Update session state but don't update the actual group until "Update" is clicked
-                    st.session_state[group_key] = updated_group
                 
                 with cols[1]:
                     # Position selection for the OR group in the path
@@ -963,11 +960,8 @@ def display_career_path_builder():
                         options=position_options,
                         format_func=lambda x: position_labels[x] if x < len(position_labels) else "End of path",
                         index=position_index,
-                        key=position_key
+                        key=f"position_{mos}_{i}"
                     )
-                    
-                    # Update session state
-                    st.session_state[position_key] = selected_position
                 
                 with cols[2]:
                     # Option to delete this group
@@ -983,13 +977,13 @@ def display_career_path_builder():
                     
                     # Button to update the group
                     if st.button(f"Update", key=f"update_or_group_{mos}_{i}"):
-                        or_groups[i] = st.session_state[group_key]
-                        or_group_positions[group_id] = st.session_state[position_key]
+                        or_groups[i] = updated_group  # Get value directly from the widget result
+                        or_group_positions[group_id] = selected_position
                         st.session_state.custom_paths[mos]['or_groups'] = or_groups
                         st.session_state.custom_paths[mos]['or_group_positions'] = or_group_positions
                         st.success(f"Updated Group {i+1}")
                         st.rerun()
-            
+                            
             # Save OR groups
             st.session_state.custom_paths[mos]['or_groups'] = or_groups
             st.session_state.custom_paths[mos]['or_group_positions'] = or_group_positions
