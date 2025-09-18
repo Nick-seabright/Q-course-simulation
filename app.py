@@ -2679,57 +2679,80 @@ def display_simulation_page():
         # MOS Distribution
         st.write("MOS Distribution (percentage of students in each path):")
         
-        # Use historical MOS distribution if available and selected
-        if use_historical_data and historical_mos_distribution:
+        # Safe MOS distribution handling
+        default_mos_distribution = {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+
+        if use_historical_data:
             try:
-                # Validate that historical_mos_distribution contains only numeric values
-                standard_mos_keys = ['18A', '18B', '18C', '18D', '18E']
-                valid_distribution = True
-                
-                # Create a clean copy with only valid entries
-                clean_distribution = {}
-                for mos in standard_mos_keys:
-                    value = historical_mos_distribution.get(mos, 0.2)
-                    if isinstance(value, (int, float)):
-                        clean_distribution[mos] = float(value)
-                    else:
-                        valid_distribution = False
-                        clean_distribution[mos] = 0.2
-                        st.warning(f"Invalid value for {mos} in historical distribution: {value}")
-                
-                if valid_distribution:
-                    st.info("Using historical MOS distribution data")
+                # First check if we have historical distribution data
+                if historical_mos_distribution is None:
+                    st.warning("No historical MOS distribution data available. Using default distribution.")
+                    mos_distribution = default_mos_distribution.copy()
                 else:
-                    st.warning("Some invalid values in historical MOS distribution were replaced with defaults.")
+                    # Validate the structure of historical_mos_distribution
+                    standard_mos = ['18A', '18B', '18C', '18D', '18E']
+                    valid_distribution = True
                     
-                mos_distribution = clean_distribution.copy()
-                
-                # Display the historical distribution but allow adjustments
-                mos_cols = st.columns(5)
-                
-                with mos_cols[0]:
-                    mos_distribution['18A'] = st.slider("18A (Officer)", 0, 100,
-                                                      int(clean_distribution.get('18A', 0.2) * 100)) / 100
-                
-                with mos_cols[1]:
-                    mos_distribution['18B'] = st.slider("18B (Weapons)", 0, 100,
-                                                      int(clean_distribution.get('18B', 0.2) * 100)) / 100
-                
-                with mos_cols[2]:
-                    mos_distribution['18C'] = st.slider("18C (Engineer)", 0, 100,
-                                                      int(clean_distribution.get('18C', 0.2) * 100)) / 100
-                
-                with mos_cols[3]:
-                    mos_distribution['18D'] = st.slider("18D (Medical)", 0, 100,
-                                                      int(clean_distribution.get('18D', 0.2) * 100)) / 100
-                
-                with mos_cols[4]:
-                    mos_distribution['18E'] = st.slider("18E (Communications)", 0, 100,
-                                                      int(clean_distribution.get('18E', 0.2) * 100)) / 100
+                    # Check if it's a dictionary with the expected keys
+                    if not isinstance(historical_mos_distribution, dict):
+                        valid_distribution = False
+                        st.error(f"Invalid MOS distribution type: {type(historical_mos_distribution)}")
+                    else:
+                        # Ensure all standard MOS keys exist with numeric values
+                        safe_distribution = {}
+                        for mos in standard_mos:
+                            if mos not in historical_mos_distribution:
+                                safe_distribution[mos] = 0.2
+                                valid_distribution = False
+                            else:
+                                value = historical_mos_distribution[mos]
+                                if not isinstance(value, (int, float)):
+                                    safe_distribution[mos] = 0.2
+                                    valid_distribution = False
+                                    st.warning(f"Non-numeric value for {mos}: {value}")
+                                else:
+                                    safe_distribution[mos] = float(value)
+                        
+                        # Normalize to ensure sum is 1.0
+                        total = sum(safe_distribution.values())
+                        if total == 0:
+                            safe_distribution = default_mos_distribution.copy()
+                        else:
+                            safe_distribution = {k: v/total for k, v in safe_distribution.items()}
+                    
+                    if valid_distribution:
+                        st.info("Using historical MOS distribution data")
+                        mos_distribution = safe_distribution
+                    else:
+                        st.warning("Found issues with historical MOS distribution. Using corrected values.")
+                        mos_distribution = safe_distribution
+                    
+                    # Display the distribution with sliders
+                    mos_cols = st.columns(5)
+                    
+                    with mos_cols[0]:
+                        mos_distribution['18A'] = st.slider("18A (Officer)", 0, 100,
+                                                        int(mos_distribution['18A'] * 100)) / 100
+                    
+                    with mos_cols[1]:
+                        mos_distribution['18B'] = st.slider("18B (Weapons)", 0, 100,
+                                                        int(mos_distribution['18B'] * 100)) / 100
+                    
+                    with mos_cols[2]:
+                        mos_distribution['18C'] = st.slider("18C (Engineer)", 0, 100,
+                                                        int(mos_distribution['18C'] * 100)) / 100
+                    
+                    with mos_cols[3]:
+                        mos_distribution['18D'] = st.slider("18D (Medical)", 0, 100,
+                                                        int(mos_distribution['18D'] * 100)) / 100
+                    
+                    with mos_cols[4]:
+                        mos_distribution['18E'] = st.slider("18E (Communications)", 0, 100,
+                                                        int(mos_distribution['18E'] * 100)) / 100
             except Exception as e:
-                st.error(f"Error processing historical MOS distribution: {e}")
+                st.error(f"Error processing MOS distribution: {e}")
                 st.warning("Using default MOS distribution instead.")
-                mos_distribution = {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+                mos_distribution = default_mos_distribution.copy()
         else:
             # Manual MOS distribution
             mos_distribution = {}
