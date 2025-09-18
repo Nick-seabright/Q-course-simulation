@@ -154,7 +154,14 @@ def display_sidebar_navigation():
     
     # Highlight current page and show progress
     progress_idx = pages.index(st.session_state.current_page) if st.session_state.current_page in pages else 0
-    progress_pct = (progress_idx / (len(pages) - 1)) * 100
+    
+    # Ensure progress_pct is within [0.0, 1.0]
+    # The error happens because we're dividing by (len(pages) - 1) which could be 0
+    # or the calculation might result in a value > 1.0
+    if len(pages) <= 1:
+        progress_pct = 0.0
+    else:
+        progress_pct = min(1.0, max(0.0, progress_idx / (len(pages) - 1)))
     
     st.sidebar.progress(progress_pct)
     
