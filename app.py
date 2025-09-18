@@ -821,27 +821,52 @@ def display_career_path_builder():
                 used_in_path = current_path + [course for group in or_groups for course in group]
                 available_for_or = [c for c in all_courses if c not in used_in_path]
                 
-                # Allow selecting multiple courses for the OR group
-                selected_courses = st.multiselect(
-                    "Select courses for this OR group",
-                    options=available_for_or,
-                    default=st.session_state[f'temp_or_group_{mos}'],
-                    key=f"new_or_group_{mos}"
-                )
+                # Keep track of selections for each course with individual checkboxes
+                if f'or_group_selections_{mos}' not in st.session_state:
+                    st.session_state[f'or_group_selections_{mos}'] = {course: False for course in available_for_or}
                 
-                # Update the temporary OR group
-                st.session_state[f'temp_or_group_{mos}'] = selected_courses
+                # Update available courses if needed
+                for course in available_for_or:
+                    if course not in st.session_state[f'or_group_selections_{mos}']:
+                        st.session_state[f'or_group_selections_{mos}'][course] = False
                 
+                # Display checkboxes in a grid layout (3 columns)
+                st.write("Select courses for this OR group:")
+                
+                # Create columns for the checkboxes
+                checkbox_cols = st.columns(3)
+                
+                # Display checkboxes for each available course
+                for i, course in enumerate(sorted(available_for_or)):
+                    col_idx = i % 3
+                    with checkbox_cols[col_idx]:
+                        # Use a unique key for each checkbox
+                        selected = st.checkbox(
+                            course, 
+                            value=st.session_state[f'or_group_selections_{mos}'].get(course, False),
+                            key=f"or_check_{mos}_{course.replace(' ', '_')}"
+                        )
+                        # Update the selection state
+                        st.session_state[f'or_group_selections_{mos}'][course] = selected
+                
+                # Build the list of selected courses
+                selected_courses = [course for course, selected in st.session_state[f'or_group_selections_{mos}'].items() if selected]
+                
+                # Show the current selection
+                if selected_courses:
+                    st.success(f"Selected {len(selected_courses)} courses for this OR group: {', '.join(selected_courses)}")
+                
+                # Add the OR group button
                 if st.button("Add OR Group to Path", key=f"add_or_group_to_path_{mos}") and selected_courses:
                     # Add to OR groups
                     or_groups.append(selected_courses)
                     # Add to path order
-                    path_order.append({'type': 'or_group', 'content': len(or_groups) - 1})  # Store index of the OR group
+                    path_order.append({'type': 'or_group', 'content': len(or_groups) - 1})
                     # Update session state
                     st.session_state.custom_paths[mos]['or_groups'] = or_groups
                     st.session_state.custom_paths[mos]['path_order'] = path_order
-                    # Clear temporary group
-                    st.session_state[f'temp_or_group_{mos}'] = []
+                    # Clear selections
+                    st.session_state[f'or_group_selections_{mos}'] = {course: False for course in available_for_or}
                     st.success(f"Added OR group with {len(selected_courses)} courses to path")
                     st.rerun()
             
@@ -969,23 +994,58 @@ def display_career_path_builder():
                 st.write("### Edit OR Groups")
                 for i, group in enumerate(or_groups):
                     st.write(f"**OR Group {i+1}:**")
-                    cols = st.columns([3, 1])
                     
+                    # Create a unique key for this group's selection state
+                    group_key = f"or_edit_selections_{mos}_{i}"
+                    
+                    # Initialize selection state for this group if needed
+                    if group_key not in st.session_state:
+                        st.session_state[group_key] = {
+                            course: (course in group) for course in all_courses 
+                            if course not in current_path and (course in group or course not in [c for g in or_groups for c in g if g != group])
+                        }
+                    
+                    # Get available courses for this group
+                    edit_options = [c for c in all_courses 
+                                  if c not in current_path and (c in group or c not in [c for g in or_groups for c in g if g != group])]
+                    
+                    # Update available options
+                    for course in edit_options:
+                        if course not in st.session_state[group_key]:
+                            st.session_state[group_key][course] = course in group
+                    
+                    # Display checkboxes in a grid layout
+                    st.write("Select courses for this OR group:")
+                    
+                    # Create columns for the checkboxes
+                    cols = st.columns([3, 1])
                     with cols[0]:
-                        # For editing, we include all available courses plus the current group members
-                        edit_options = [c for c in all_courses if c not in current_path and (c in group or c not in [course for g in or_groups for course in g if g != group])]
+                        # Use 3 columns for the checkboxes
+                        checkbox_cols = st.columns(3)
                         
-                        # Use a unique key for each group's multiselect
-                        updated_group = st.multiselect(
-                            f"Edit courses for OR Group {i+1}",
-                            options=edit_options,
-                            default=group,
-                            key=f"edit_or_group_{mos}_{i}"
-                        )
+                        # Display checkboxes for each available course
+                        for j, course in enumerate(sorted(edit_options)):
+                            col_idx = j % 3
+                            with checkbox_cols[col_idx]:
+                                # Use a unique key for each checkbox
+                                selected = st.checkbox(
+                                    course, 
+                                    value=st.session_state[group_key].get(course, course in group),
+                                    key=f"or_edit_{mos}_{i}_{course.replace(' ', '_')}"
+                                )
+                                # Update the selection state
+                                st.session_state[group_key][course] = selected
+                        
+                        # Build the list of selected courses
+                        updated_group = [course for course, selected in st.session_state[group_key].items() if selected]
+                        
+                        # Show the current selection
+                        if updated_group:
+                            st.success(f"Selected {len(updated_group)} courses")
                         
                         # Update the group
                         or_groups[i] = updated_group
-                        # Update the session state immediately to prevent losing selections
+                        # Update the session state immediately
                         st.session_state.custom_paths[mos]['or_groups'] = or_groups
                     
                     with cols[1]:
