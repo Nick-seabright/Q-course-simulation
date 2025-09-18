@@ -1261,7 +1261,7 @@ def display_career_path_builder():
                                     y=[or_group_y - c_idx * 0.4],  # Stagger vertically
                                     mode='markers+text',
                                     text=[display_name],
-                                    textposition='right',  # Move text to the right for better visibility
+                                    textposition='middle right',  # Valid position value
                                     hovertext=[course],  # Show full name on hover
                                     hoverinfo='text',
                                     marker=dict(size=15, color='rgba(219, 68, 55, 0.8)'),
