@@ -1450,7 +1450,6 @@ def display_career_path_builder():
     # Apply paths to configurations button
     st.subheader("Apply Career Paths to Configurations")
     st.write("This will update course prerequisites based on your custom career paths.")
-    
     col1, col2 = st.columns(2)
     with col1:
         clear_existing = st.checkbox("Clear existing prerequisites", value=True,
@@ -1458,30 +1457,63 @@ def display_career_path_builder():
     with col2:
         update_mos_paths = st.checkbox("Update MOS paths", value=True,
                                      help="If checked, each course will be marked as part of the appropriate MOS path.")
-    
     if st.button("Apply Career Paths to Prerequisites"):
-        if 'course_configs' not in st.session_state or not st.session_state.course_configs:
-            st.error("No course configurations found. Please go to the Course Configuration page first.")
-        else:
+        # Check if we have any courses defined in the career paths
+        all_path_courses = set()
+        for mos, path_data in st.session_state.custom_paths.items():
+            all_path_courses.update(path_data.get('path', []))
+            all_path_courses.update(path_data.get('flexible_courses', []))
+            for group in path_data.get('or_groups', []):
+                all_path_courses.update(group)
+        
+        if not all_path_courses:
+            st.error("No courses defined in any career paths. Please add courses to your career paths first.")
+        elif 'course_configs' not in st.session_state:
+            st.session_state.course_configs = {}
+            # Initialize course configs for all courses in the career paths
+            for course in all_path_courses:
+                st.session_state.course_configs[course] = {
+                    'prerequisites': {
+                        'type': 'AND',
+                        'courses': []
+                    },
+                    'or_prerequisites': [],
+                    'mos_paths': {
+                        '18A': [],
+                        '18B': [],
+                        '18C': [],
+                        '18D': [],
+                        '18E': []
+                    },
+                    'required_for_all_mos': False,
+                    'max_capacity': 50,  # Default values
+                    'classes_per_year': 4,
+                    'reserved_seats': {
+                        'OF': 0,
+                        'ADE': 0,
+                        'NG': 0
+                    },
+                    'officer_enlisted_ratio': None,
+                    'use_even_mos_ratio': False
+                }
+            st.success(f"Created configurations for {len(all_path_courses)} courses found in career paths.")
+            
+            # Now apply the career paths to the newly created configurations
             try:
                 # First, convert path_order structure to the format expected by apply_custom_paths_to_configs
                 for mos, path_data in st.session_state.custom_paths.items():
                     path_order = path_data.get('path_order', [])
                     or_groups = path_data.get('or_groups', [])
-                    
                     # Rebuild the path and prerequisites based on the path_order
                     new_path = []
                     new_prerequisites = {}
-                    
                     for i, item in enumerate(path_order):
                         if item['type'] == 'course':
                             course = item['content']
                             new_path.append(course)
-                            
                             # Set prerequisites based on previous item
                             if i > 0:
                                 prev_item = path_order[i-1]
-                                
                                 if prev_item['type'] == 'course':
                                     # Simple course-to-course prerequisite
                                     new_prerequisites[course] = [prev_item['content']]
@@ -1490,16 +1522,13 @@ def display_career_path_builder():
                                     group_idx = prev_item['content']
                                     if group_idx < len(or_groups):
                                         new_prerequisites[course] = or_groups[group_idx]
-                        
                         elif item['type'] == 'or_group':
                             group_idx = item['content']
                             if group_idx < len(or_groups):
                                 group_courses = or_groups[group_idx]
-                                
                                 # Set prerequisites for all courses in this OR group
                                 if i > 0:
                                     prev_item = path_order[i-1]
-                                    
                                     if prev_item['type'] == 'course':
                                         for or_course in group_courses:
                                             new_prerequisites[or_course] = [prev_item['content']]
@@ -1508,27 +1537,22 @@ def display_career_path_builder():
                                         if prev_group_idx < len(or_groups):
                                             for or_course in group_courses:
                                                 new_prerequisites[or_course] = or_groups[prev_group_idx]
-                    
                     # Update the path in the custom_paths
                     st.session_state.custom_paths[mos]['path'] = new_path
-                
                 # Apply the updated custom paths to configurations
                 updated_configs, changes = apply_custom_paths_to_configs(
                     st.session_state.course_configs,
                     st.session_state.custom_paths
                 )
-                
                 if changes:
                     st.session_state.career_path_changes = changes
                     st.success(f"Made {len(changes)} updates to course configurations based on career paths!")
-                    
                     # Show summary of changes
                     with st.expander("View Changes", expanded=True):
                         # Count changes by type
                         change_counts = defaultdict(int)
                         for change in changes:
                             change_counts[change['action']] += 1
-                        
                         # Display counts
                         st.write("### Changes Summary")
                         for action, count in change_counts.items():
@@ -1544,14 +1568,12 @@ def display_career_path_builder():
                                 st.write(f"• Set {count} flexible course constraints")
                             elif action == 'added_flexible_as_prerequisite':
                                 st.write(f"• Added {count} flexible courses as prerequisites")
-                        
                         # Option to see all changes
                         if st.checkbox("Show all changes"):
                             for change in changes:
                                 course = change['course']
                                 mos = change['mos']
                                 action = change['action']
-                                
                                 if action == 'set_prerequisites':
                                     prereqs = change['prerequisites']
                                     st.write(f"• Set prerequisites for {course} ({mos}): {', '.join(prereqs)}")
@@ -1568,7 +1590,139 @@ def display_career_path_builder():
                                 elif action == 'added_flexible_as_prerequisite':
                                     prereq = change['prerequisite_added']
                                     st.write(f"• Added flexible course {prereq} as prerequisite for {course} ({mos})")
-                    
+                    # Option to apply changes
+                    if st.button("Confirm and Update Configurations"):
+                        st.session_state.course_configs = updated_configs
+                        st.success("Course configurations updated successfully!")
+                        st.rerun()
+                else:
+                    st.info("No changes needed. Course configurations already match the career paths.")
+            except Exception as e:
+                st.error(f"Error applying career paths: {str(e)}")
+                import traceback
+                st.error(traceback.format_exc())
+        
+        else:
+            try:
+                # First, convert path_order structure to the format expected by apply_custom_paths_to_configs
+                for mos, path_data in st.session_state.custom_paths.items():
+                    path_order = path_data.get('path_order', [])
+                    or_groups = path_data.get('or_groups', [])
+                    # Rebuild the path and prerequisites based on the path_order
+                    new_path = []
+                    new_prerequisites = {}
+                    for i, item in enumerate(path_order):
+                        if item['type'] == 'course':
+                            course = item['content']
+                            new_path.append(course)
+                            # Set prerequisites based on previous item
+                            if i > 0:
+                                prev_item = path_order[i-1]
+                                if prev_item['type'] == 'course':
+                                    # Simple course-to-course prerequisite
+                                    new_prerequisites[course] = [prev_item['content']]
+                                elif prev_item['type'] == 'or_group':
+                                    # OR group as prerequisite
+                                    group_idx = prev_item['content']
+                                    if group_idx < len(or_groups):
+                                        new_prerequisites[course] = or_groups[group_idx]
+                        elif item['type'] == 'or_group':
+                            group_idx = item['content']
+                            if group_idx < len(or_groups):
+                                group_courses = or_groups[group_idx]
+                                # Set prerequisites for all courses in this OR group
+                                if i > 0:
+                                    prev_item = path_order[i-1]
+                                    if prev_item['type'] == 'course':
+                                        for or_course in group_courses:
+                                            new_prerequisites[or_course] = [prev_item['content']]
+                                    elif prev_item['type'] == 'or_group':
+                                        prev_group_idx = prev_item['content']
+                                        if prev_group_idx < len(or_groups):
+                                            for or_course in group_courses:
+                                                new_prerequisites[or_course] = or_groups[prev_group_idx]
+                    # Update the path in the custom_paths
+                    st.session_state.custom_paths[mos]['path'] = new_path
+                
+                # Make sure course configs exist for all courses in the career paths
+                for course in all_path_courses:
+                    if course not in st.session_state.course_configs:
+                        st.session_state.course_configs[course] = {
+                            'prerequisites': {
+                                'type': 'AND',
+                                'courses': []
+                            },
+                            'or_prerequisites': [],
+                            'mos_paths': {
+                                '18A': [],
+                                '18B': [],
+                                '18C': [],
+                                '18D': [],
+                                '18E': []
+                            },
+                            'required_for_all_mos': False,
+                            'max_capacity': 50,  # Default values
+                            'classes_per_year': 4,
+                            'reserved_seats': {
+                                'OF': 0,
+                                'ADE': 0,
+                                'NG': 0
+                            },
+                            'officer_enlisted_ratio': None,
+                            'use_even_mos_ratio': False
+                        }
+                
+                # Apply the updated custom paths to configurations
+                updated_configs, changes = apply_custom_paths_to_configs(
+                    st.session_state.course_configs,
+                    st.session_state.custom_paths
+                )
+                if changes:
+                    st.session_state.career_path_changes = changes
+                    st.success(f"Made {len(changes)} updates to course configurations based on career paths!")
+                    # Show summary of changes
+                    with st.expander("View Changes", expanded=True):
+                        # Count changes by type
+                        change_counts = defaultdict(int)
+                        for change in changes:
+                            change_counts[change['action']] += 1
+                        # Display counts
+                        st.write("### Changes Summary")
+                        for action, count in change_counts.items():
+                            if action == 'set_prerequisites':
+                                st.write(f"• Set prerequisites for {count} courses")
+                            elif action == 'added_to_mos_path':
+                                st.write(f"• Added {count} courses to MOS paths")
+                            elif action == 'added_as_flexible_course':
+                                st.write(f"• Added {count} flexible courses to MOS paths")
+                            elif action == 'added_or_prerequisite':
+                                st.write(f"• Added {count} OR prerequisites")
+                            elif action == 'set_flexible_prerequisites':
+                                st.write(f"• Set {count} flexible course constraints")
+                            elif action == 'added_flexible_as_prerequisite':
+                                st.write(f"• Added {count} flexible courses as prerequisites")
+                        # Option to see all changes
+                        if st.checkbox("Show all changes"):
+                            for change in changes:
+                                course = change['course']
+                                mos = change['mos']
+                                action = change['action']
+                                if action == 'set_prerequisites':
+                                    prereqs = change['prerequisites']
+                                    st.write(f"• Set prerequisites for {course} ({mos}): {', '.join(prereqs)}")
+                                elif action == 'added_to_mos_path':
+                                    st.write(f"• Added {course} to {mos} career path")
+                                elif action == 'added_as_flexible_course':
+                                    st.write(f"• Added {course} as a flexible course for {mos}")
+                                elif action == 'added_or_prerequisite':
+                                    or_group = change['or_group']
+                                    st.write(f"• Added OR prerequisite to {course} ({mos}): {' OR '.join(or_group)}")
+                                elif action == 'set_flexible_prerequisites':
+                                    prereqs = change['prerequisites']
+                                    st.write(f"• Set prerequisites for flexible course {course} ({mos}): {', '.join(prereqs)}")
+                                elif action == 'added_flexible_as_prerequisite':
+                                    prereq = change['prerequisite_added']
+                                    st.write(f"• Added flexible course {prereq} as prerequisite for {course} ({mos})")
                     # Option to apply changes
                     if st.button("Confirm and Update Configurations"):
                         st.session_state.course_configs = updated_configs
