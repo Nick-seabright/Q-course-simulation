@@ -3,6 +3,7 @@ import numpy as np
 from datetime import datetime
 from collections import defaultdict
 import streamlit as st
+import copy
 
 """
 Data Processing Module Training Schedule Optimizer
