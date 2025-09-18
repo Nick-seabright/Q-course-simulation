@@ -513,30 +513,53 @@ def extract_historical_arrival_patterns(processed_data: pd.DataFrame) -> Optiona
     }
 
 @st.cache_data(ttl=3600)
-def extract_historical_mos_distribution(processed_data):
+def extract_historical_mos_distribution(processed_data: pd.DataFrame) -> Dict[str, float]:
     """
     Extract historical MOS distribution from processed data
+    
     Args:
         processed_data: Processed training data
+        
     Returns:
-        dict: Dictionary of MOS distribution
+        Dictionary of MOS distribution
     """
-    # Default distribution if we can't extract from data
-    default_distribution = {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
-    
     # Define the MOS column to use
     mos_column = None
     
-    # Check if MOS column exists and has data (might be called "Training MOS" or similar)
-    if 'TrainingMOS' in processed_data.columns and not processed_data['TrainingMOS'].isna().all():
+    # Check if MOS column exists (might be called "Training MOS" or similar)
+    if 'TrainingMOS' in processed_data.columns:
         mos_column = 'TrainingMOS'
-    elif 'Training MOS' in processed_data.columns and not processed_data['Training MOS'].isna().all():
-        mos_column = 'Training MOS'
+    else:
+        # Try to find another suitable column
+        possible_columns = ['Training MOS', 'MOS', 'TrainingMOS', 'TMOS']
+        
+        for col in possible_columns:
+            if col in processed_data.columns:
+                mos_column = col
+                break
     
-    # If no MOS data is available or all values are null, return default distribution
-    if not mos_column or processed_data[mos_column].isna().all():
-        print("No MOS data found in the dataset. Using default distribution.")
-        return default_distribution
+    # If no explicit MOS column found, try to infer from other data
+    if not mos_column:
+        # For example, Officers (CP Pers Type = 'O') might be 18A
+        if 'CP Pers Type' in processed_data.columns:
+            # Create synthetic MOS distribution based on personnel type
+            officers = (processed_data['CP Pers Type'] == 'O').sum()
+            enlisted = (processed_data['CP Pers Type'] == 'E').sum()
+            total = officers + enlisted
+            
+            if total > 0:
+                # Officers are 18A, distribute enlisted evenly among other MOS
+                mos_distribution = {
+                    '18A': float(officers / total),
+                    '18B': float(enlisted / total / 4),
+                    '18C': float(enlisted / total / 4),
+                    '18D': float(enlisted / total / 4),
+                    '18E': float(enlisted / total / 4)
+                }
+                return mos_distribution
+        
+        # Default distribution if we can't extract from data
+        return {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
     
     # If we have an MOS column, calculate the distribution
     mos_counts = processed_data[mos_column].value_counts()
@@ -564,43 +587,21 @@ def extract_historical_mos_distribution(processed_data):
         
         # If not one of our standard MOS codes, group with the closest match
         if standard_mos not in ['18A', '18B', '18C', '18D', '18E']:
-            # Default to distributing evenly among enlisted MOS if officer/enlisted info available
-            if 'CP Pers Type' in processed_data.columns:
-                # Check if this MOS is typically for officers
-                mos_entries = processed_data[processed_data[mos_column] == mos]
-                officer_count = (mos_entries['CP Pers Type'] == 'O').sum()
-                enlisted_count = (mos_entries['CP Pers Type'] == 'E').sum()
-                
-                if officer_count > enlisted_count:
-                    standard_mos = '18A'  # Assume officer MOS
-                else:
-                    # Use a deterministic assignment based on string hash
-                    # to ensure consistent mapping instead of random choice
-                    hash_value = hash(str(mos)) % 4
-                    standard_mos = ['18B', '18C', '18D', '18E'][hash_value]
-            else:
-                # If no officer/enlisted info, use hash for deterministic mapping
-                hash_value = hash(str(mos)) % 5
-                standard_mos = ['18A', '18B', '18C', '18D', '18E'][hash_value]
+            # Use a deterministic assignment based on string hash
+            # to ensure consistent mapping instead of random choice
+            hash_value = hash(str(mos)) % 5
+            standard_mos = ['18A', '18B', '18C', '18D', '18E'][hash_value]
         
-        # Add to distribution
+        # Add to distribution - ensure we're dealing with floats
         if standard_mos in mos_distribution:
-            mos_distribution[standard_mos] += count / total_students if total_students > 0 else 0
+            mos_distribution[standard_mos] += float(count / total_students) if total_students > 0 else 0.0
         else:
-            mos_distribution[standard_mos] = count / total_students if total_students > 0 else 0
+            mos_distribution[standard_mos] = float(count / total_students) if total_students > 0 else 0.0
     
     # Ensure all standard MOS codes are present
     for mos in ['18A', '18B', '18C', '18D', '18E']:
         if mos not in mos_distribution:
-            mos_distribution[mos] = 0
-    
-    # Add metadata about the distribution
-    mos_distribution['_metadata'] = {
-        'source_column': mos_column,
-        'total_students': int(total_students),
-        'original_codes': len(mos_counts),
-        'mapped_codes': len(set(mos_distribution.keys()) - {'_metadata'})
-    }
+            mos_distribution[mos] = 0.0
     
     return mos_distribution
 
