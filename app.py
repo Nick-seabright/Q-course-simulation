@@ -371,6 +371,13 @@ def display_career_path_builder():
     st.header("Career Path Builder")
     st.write("Build and edit career paths for each MOS to automatically set prerequisites.")
 
+    # Check if data is uploaded first
+    if 'processed_data' not in st.session_state or st.session_state.processed_data is None:
+        if 'data' not in st.session_state or st.session_state.data is None:
+            st.warning("Please upload data first before using the Career Path Builder.")
+            st.write("Go to the 'Upload Data' page to upload your training data.")
+            return
+
     # Initialize custom paths in session state if not present
     if 'custom_paths' not in st.session_state:
         st.session_state.custom_paths = {
@@ -385,23 +392,38 @@ def display_career_path_builder():
     if 'General' not in st.session_state.custom_paths:
         st.session_state.custom_paths['General'] = {'path': [], 'flexible_courses': []}
 
-    # Create tabs for each MOS and General path
-    path_tabs = st.tabs(['General', '18A (Officer)', '18B (Weapons)', '18C (Engineer)', '18D (Medical)', '18E (Communications)'])
-
     # Get all available courses
-    if 'course_configs' in st.session_state:
-        all_courses = list(st.session_state.course_configs.keys())
-    else:
-        # If course configs aren't available yet, use courses from processed data if available
-        if 'processed_data' in st.session_state and st.session_state.processed_data is not None:
-            all_courses = list(st.session_state.processed_data['Course Title'].unique())
-        else:
-            all_courses = []
-    all_courses.sort()
+    all_courses = []
+
+    # First try to get courses from course_configs
+    if 'course_configs' in st.session_state and st.session_state.course_configs:
+        all_courses.extend(list(st.session_state.course_configs.keys()))
+
+    # Then try to get courses from processed_data if it exists
+    if 'processed_data' in st.session_state and st.session_state.processed_data is not None:
+        data_courses = list(st.session_state.processed_data['Course Title'].unique())
+        all_courses.extend([c for c in data_courses if c not in all_courses])
+
+    # If we still don't have courses, check raw data
+    if not all_courses and 'data' in st.session_state and st.session_state.data is not None:
+        data_courses = list(st.session_state.data['Course Title'].unique())
+        all_courses.extend(data_courses)
+
+    # Remove duplicates and sort
+    all_courses = sorted(list(set(all_courses)))
+
+    # Debug information
+    st.write(f"Debug: Found {len(all_courses)} unique courses")
+    with st.expander("Available Courses"):
+        for i, course in enumerate(all_courses):
+            st.write(f"{i+1}. {course}")
 
     if not all_courses:
-        st.warning("No courses available. Please upload data or configure courses first.")
+        st.error("No courses found. Please upload data or configure courses first.")
         return
+
+    # Create tabs for each MOS and General path
+    path_tabs = st.tabs(['General', '18A (Officer)', '18B (Weapons)', '18C (Engineer)', '18D (Medical)', '18E (Communications)'])
 
     # Process each tab
     for i, mos in enumerate(['General', '18A', '18B', '18C', '18D', '18E']):
@@ -413,6 +435,9 @@ def display_career_path_builder():
             current_path = path_data.get('path', [])
             flexible_courses = path_data.get('flexible_courses', [])
             
+            # Debug information for this MOS
+            st.write(f"Debug: Current path has {len(current_path)} courses, flexible has {len(flexible_courses)} courses")
+            
             # Build Career Path
             st.write("### Build Career Path")
             st.write("Add courses in sequence to create a career path. Courses will automatically get prerequisites based on their order.")
@@ -420,13 +445,20 @@ def display_career_path_builder():
             # Add course to path
             col1, col2 = st.columns([3, 1])
             with col1:
-                new_course = st.selectbox(
-                    "Add Course to Path",
-                    options=[""] + [c for c in all_courses if c not in current_path and c not in flexible_courses],
-                    key=f"add_course_{mos}"
-                )
+                # Get courses that aren't already in any path
+                available_courses = [c for c in all_courses if c not in current_path and c not in flexible_courses]
+                if not available_courses:
+                    st.warning("All courses have been added to either the path or flexible courses.")
+                    new_course = ""
+                else:
+                    new_course = st.selectbox(
+                        "Add Course to Path",
+                        options=[""] + available_courses,
+                        key=f"add_course_{mos}"
+                    )
             with col2:
-                if st.button("Add", key=f"add_button_{mos}") and new_course:
+                add_button = st.button("Add", key=f"add_button_{mos}")
+                if add_button and new_course:
                     current_path.append(new_course)
                     st.session_state.custom_paths[mos]['path'] = current_path
                     st.success(f"Added {new_course} to path")
@@ -495,11 +527,17 @@ def display_career_path_builder():
             # Add flexible course
             col1, col2 = st.columns([3, 1])
             with col1:
-                new_flexible = st.selectbox(
-                    "Add Flexible Course",
-                    options=[""] + [c for c in all_courses if c not in current_path and c not in flexible_courses],
-                    key=f"add_flexible_{mos}"
-                )
+                # Get courses that aren't already in any path
+                available_flex_courses = [c for c in all_courses if c not in current_path and c not in flexible_courses]
+                if not available_flex_courses:
+                    st.warning("All courses have been added to either the path or flexible courses.")
+                    new_flexible = ""
+                else:
+                    new_flexible = st.selectbox(
+                        "Add Flexible Course",
+                        options=[""] + available_flex_courses,
+                        key=f"add_flexible_{mos}"
+                    )
             with col2:
                 if st.button("Add", key=f"add_flexible_button_{mos}") and new_flexible:
                     flexible_courses.append(new_flexible)
@@ -701,6 +739,61 @@ def display_career_path_builder():
                     st.rerun()
             else:
                 st.info("No changes needed. Course configurations already match the career paths.")
+
+    # Add debugging information
+    with st.expander("Debug Information", expanded=False):
+        st.write("### Session State Keys")
+        st.write(list(st.session_state.keys()))
+        
+        st.write("### Course Information")
+        st.write(f"Total courses available: {len(all_courses)}")
+        
+        if 'course_configs' in st.session_state:
+            st.write(f"Courses in course_configs: {len(st.session_state.course_configs)}")
+            st.write("Course config keys:")
+            st.write(list(st.session_state.course_configs.keys()))
+        
+        if 'processed_data' in st.session_state and st.session_state.processed_data is not None:
+            unique_courses = st.session_state.processed_data['Course Title'].unique()
+            st.write(f"Unique courses in processed_data: {len(unique_courses)}")
+            st.write("First 10 courses in processed_data:")
+            st.write(list(unique_courses)[:10])
+        
+        st.write("### Current Custom Paths")
+        for mos, path_data in st.session_state.custom_paths.items():
+            st.write(f"**{mos}**:")
+            st.write(f"- Path ({len(path_data.get('path', []))} courses): {', '.join(path_data.get('path', []))}")
+            st.write(f"- Flexible ({len(path_data.get('flexible_courses', []))} courses): {', '.join(path_data.get('flexible_courses', []))}")
+        
+        # Check if there are duplicate courses across paths
+        all_path_courses = []
+        for mos, path_data in st.session_state.custom_paths.items():
+            all_path_courses.extend(path_data.get('path', []))
+            all_path_courses.extend(path_data.get('flexible_courses', []))
+        
+        course_counts = {}
+        for course in all_path_courses:
+            if course in course_counts:
+                course_counts[course] += 1
+            else:
+                course_counts[course] = 1
+        
+        duplicates = {course: count for course, count in course_counts.items() if count > 1}
+        if duplicates:
+            st.warning("Duplicate courses found in different paths:")
+            for course, count in duplicates.items():
+                st.write(f"- {course}: appears in {count} paths")
+
+    # Add a link to the next step
+    st.write("---")
+    st.write("Next Steps:")
+    st.info("Once you've defined your career paths and applied them to your configurations, proceed to the Course Configuration page to review and further customize your course settings.")
+
+    # Add a direct link button
+    if st.button("Go to Course Configuration"):
+        # Store a flag in session state
+        st.session_state.navigate_to = "Course Configuration"
+        st.rerun()
 
 def display_config_page():
     st.header("Course Configuration")
