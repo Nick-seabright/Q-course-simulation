@@ -1195,19 +1195,28 @@ def display_career_path_builder():
                 or_group_y_start = -1
                 flexible_y = 1
                 
+                # Set spacing between elements
+                x_spacing = 2  # Increase horizontal spacing
+                
                 # Plot the main path in sequence (including OR groups)
                 for j, item in enumerate(path_order):
+                    x_pos = j * x_spacing  # Use wider spacing for better readability
                     item_type = item['type']
                     
                     if item_type == 'course':
                         course = item['content']
+                        # Truncate long course names for display
+                        display_name = course if len(course) < 25 else course[:22] + "..."
+                        
                         # Plot regular course
                         fig.add_trace(go.Scatter(
-                            x=[j],
+                            x=[x_pos],
                             y=[main_path_y],
                             mode='markers+text',
-                            text=[course],
+                            text=[display_name],
                             textposition='top center',
+                            hovertext=[course],  # Show full name on hover
+                            hoverinfo='text',
                             marker=dict(size=20, color='rgba(66, 133, 244, 0.8)'),
                             name=course
                         ))
@@ -1219,7 +1228,7 @@ def display_career_path_builder():
                             
                             # Add a special marker for the OR group in the main path
                             fig.add_trace(go.Scatter(
-                                x=[j],
+                                x=[x_pos],
                                 y=[main_path_y],
                                 mode='markers+text',
                                 text=[f"OR Group {group_idx+1}"],
@@ -1229,11 +1238,11 @@ def display_career_path_builder():
                             ))
                             
                             # Add the OR group courses below
-                            or_group_y = or_group_y_start - group_idx
+                            or_group_y = or_group_y_start - group_idx * 0.8  # Adjust vertical spacing
                             
                             # Add a label for the OR group
                             fig.add_annotation(
-                                x=j - 0.3,
+                                x=x_pos - 0.5,
                                 y=or_group_y,
                                 text=f"Take ONE:",
                                 showarrow=False,
@@ -1243,23 +1252,28 @@ def display_career_path_builder():
                             
                             # Plot courses in the OR group in a vertical arrangement
                             for c_idx, course in enumerate(group_courses):
-                                # Plot OR group course below the main path
+                                # Truncate long course names
+                                display_name = course if len(course) < 25 else course[:22] + "..."
+                                
+                                # Plot OR group course with vertical offset for better separation
                                 fig.add_trace(go.Scatter(
-                                    x=[j + 0.1 * c_idx],  # Offset slightly for visibility
-                                    y=[or_group_y],
+                                    x=[x_pos],
+                                    y=[or_group_y - c_idx * 0.4],  # Stagger vertically
                                     mode='markers+text',
-                                    text=[course],
-                                    textposition='bottom center',
+                                    text=[display_name],
+                                    textposition='right',  # Move text to the right for better visibility
+                                    hovertext=[course],  # Show full name on hover
+                                    hoverinfo='text',
                                     marker=dict(size=15, color='rgba(219, 68, 55, 0.8)'),
                                     name=f"OR{group_idx+1}: {course}"
                                 ))
                                 
                                 # Connect to the OR group marker in the main path
                                 fig.add_annotation(
-                                    x=j,
+                                    x=x_pos,
                                     y=main_path_y,
-                                    ax=j + 0.1 * c_idx,
-                                    ay=or_group_y,
+                                    ax=x_pos,
+                                    ay=or_group_y - c_idx * 0.4,
                                     xref='x',
                                     yref='y',
                                     axref='x',
@@ -1273,10 +1287,11 @@ def display_career_path_builder():
                     
                     # Add connecting lines between path elements
                     if j < len(path_order) - 1:
+                        next_x = (j + 1) * x_spacing
                         fig.add_annotation(
-                            x=j+0.5,
+                            x=x_pos + x_spacing/2,
                             y=main_path_y,
-                            ax=j,
+                            ax=x_pos,
                             ay=main_path_y,
                             xref='x',
                             yref='y',
@@ -1291,15 +1306,21 @@ def display_career_path_builder():
                 
                 # Plot flexible courses with constraints
                 for f_idx, course in enumerate(flexible_courses):
-                    # Position flexible courses above the main path
-                    y_position = flexible_y
+                    # Stagger flexible courses horizontally for better spacing
+                    flex_x = f_idx * 3  # Use wider spacing for flexible courses
                     
+                    # Truncate long course names
+                    display_name = course if len(course) < 25 else course[:22] + "..."
+                    
+                    # Position flexible courses above the main path
                     fig.add_trace(go.Scatter(
-                        x=[f_idx],
-                        y=[y_position],
+                        x=[flex_x],
+                        y=[flexible_y],
                         mode='markers+text',
-                        text=[course],
+                        text=[display_name],
                         textposition='top center',
+                        hovertext=[course],  # Show full name on hover
+                        hoverinfo='text',
                         marker=dict(size=15, color='rgba(76, 175, 80, 0.8)', symbol='diamond'),
                         name=f"Flex: {course}"
                     ))
@@ -1317,10 +1338,10 @@ def display_career_path_builder():
                                 if path_item['type'] == 'course' and path_item['content'] == before_course:
                                     # Draw constraint line
                                     fig.add_annotation(
-                                        x=path_idx,
+                                        x=path_idx * x_spacing,
                                         y=main_path_y,
-                                        ax=f_idx,
-                                        ay=y_position,
+                                        ax=flex_x,
+                                        ay=flexible_y,
                                         xref='x',
                                         yref='y',
                                         axref='x',
@@ -1339,10 +1360,10 @@ def display_career_path_builder():
                                 if path_item['type'] == 'course' and path_item['content'] == after_course:
                                     # Draw constraint line
                                     fig.add_annotation(
-                                        x=path_idx,
+                                        x=path_idx * x_spacing,
                                         y=main_path_y,
-                                        ax=f_idx,
-                                        ay=y_position,
+                                        ax=flex_x,
+                                        ay=flexible_y,
                                         xref='x',
                                         yref='y',
                                         axref='x',
@@ -1354,14 +1375,38 @@ def display_career_path_builder():
                                         arrowcolor='rgba(76, 175, 80, 0.5)'
                                     )
                 
+                # Calculate appropriate chart dimensions
+                chart_width = max(800, len(path_order) * x_spacing * 50)  # Wider chart for better spacing
+                chart_height = max(400, 200 + len(or_groups) * 80 + (1 if flexible_courses else 0) * 100)
+                
+                # Calculate appropriate y-axis range to fit all elements
+                min_y = min(or_group_y_start - len(or_groups) * 3, -3)  # Give extra space for OR groups
+                max_y = max(2, flexible_y + 1)  # Give space for flexible courses
+                
                 # Update layout
                 fig.update_layout(
                     showlegend=False,
-                    xaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
-                    yaxis=dict(showticklabels=False, zeroline=False, showgrid=False),
+                    xaxis=dict(
+                        showticklabels=False, 
+                        zeroline=False, 
+                        showgrid=False,
+                        range=[-1, len(path_order) * x_spacing + 1]  # Ensure x-axis has enough space
+                    ),
+                    yaxis=dict(
+                        showticklabels=False, 
+                        zeroline=False, 
+                        showgrid=False,
+                        range=[min_y, max_y]  # Set appropriate y-axis range
+                    ),
                     margin=dict(l=50, r=20, t=20, b=20),
-                    height=max(300, 100 + len(or_groups) * 50 + (1 if flexible_courses else 0) * 100),
-                    width=max(600, len(path_order) * 100)
+                    height=chart_height,
+                    width=chart_width,
+                    plot_bgcolor='rgba(255,255,255,1)',  # White background for better readability
+                    hoverlabel=dict(
+                        bgcolor="white",
+                        font_size=14,
+                        font_family="Arial"
+                    )
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
