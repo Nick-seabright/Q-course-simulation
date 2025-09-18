@@ -233,47 +233,42 @@ def process_data(raw_data: pd.DataFrame) -> pd.DataFrame:
     
     return data
 
-def process_training_mos(data: pd.DataFrame) -> None:
+def process_training_mos(data):
     """
     Process Training MOS data, inferring it if not explicitly provided
-    
     Args:
         data: Training data to process
     """
-    # Check if Training MOS column exists
-    if 'Training MOS' in data.columns:
+    # Check if Training MOS column exists and has any data
+    if 'Training MOS' in data.columns and not data['Training MOS'].isna().all():
         # Use existing column
         data['TrainingMOS'] = data['Training MOS']
     else:
-        # Try to infer from other data
+        # Create new column for inferred MOS
         data['TrainingMOS'] = None
         
         # Officers are typically 18A
         if 'PersonnelType' in data.columns:
             data.loc[data['PersonnelType'] == 'Officer', 'TrainingMOS'] = '18A'
         
-        # Create mapping dictionary for more maintainable code
-        mos_keywords = {
-            '18B': ['WEAPONS', 'WEAP SGT', 'WEAPON'],
-            '18C': ['ENGINEER', 'ENG SGT', 'ENGINEERING'],
-            '18D': ['MEDICAL', 'MED SGT', 'MEDIC', 'MEDICINE'],
-            '18E': ['COMM', 'SIGNAL', 'COMMO SGT', 'COMMUNICATION']
-        }
-        
         # Try to infer enlisted MOS from course titles if available
         if 'Course Title' in data.columns:
-            # Track inference statistics
-            inference_counts = defaultdict(int)
+            # Define MOS keywords dictionary
+            mos_keywords = {
+                '18B': ['WEAPONS', 'WEAP SGT', 'WEAPON'],
+                '18C': ['ENGINEER', 'ENG SGT', 'ENGINEERING'],
+                '18D': ['MEDICAL', 'MED SGT', 'MEDIC'],
+                '18E': ['COMM', 'SIGNAL', 'COMMO']
+            }
             
+            # Try to infer MOS from course titles
             for idx, row in data.iterrows():
                 if pd.isna(data.loc[idx, 'TrainingMOS']) and data.loc[idx, 'PersonnelType'] == 'Enlisted':
                     course_title = str(row.get('Course Title', '')).upper()
                     
-                    # Use the mapping dictionary for inference
                     for mos, keywords in mos_keywords.items():
                         if any(keyword in course_title for keyword in keywords):
                             data.loc[idx, 'TrainingMOS'] = mos
-                            inference_counts[mos] += 1
                             break
 
 @st.cache_data(ttl=3600)
@@ -518,53 +513,30 @@ def extract_historical_arrival_patterns(processed_data: pd.DataFrame) -> Optiona
     }
 
 @st.cache_data(ttl=3600)
-def extract_historical_mos_distribution(processed_data: pd.DataFrame) -> Dict[str, float]:
+def extract_historical_mos_distribution(processed_data):
     """
     Extract historical MOS distribution from processed data
-    
     Args:
         processed_data: Processed training data
-        
     Returns:
-        Dictionary of MOS distribution
+        dict: Dictionary of MOS distribution
     """
+    # Default distribution if we can't extract from data
+    default_distribution = {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+    
     # Define the MOS column to use
     mos_column = None
     
-    # Check if MOS column exists (might be called "Training MOS" or similar)
-    if 'TrainingMOS' in processed_data.columns:
+    # Check if MOS column exists and has data (might be called "Training MOS" or similar)
+    if 'TrainingMOS' in processed_data.columns and not processed_data['TrainingMOS'].isna().all():
         mos_column = 'TrainingMOS'
-    else:
-        # Try to find another suitable column
-        possible_columns = ['Training MOS', 'MOS', 'TrainingMOS', 'TMOS']
-        
-        for col in possible_columns:
-            if col in processed_data.columns:
-                mos_column = col
-                break
+    elif 'Training MOS' in processed_data.columns and not processed_data['Training MOS'].isna().all():
+        mos_column = 'Training MOS'
     
-    # If no explicit MOS column found, try to infer from other data
-    if not mos_column:
-        # For example, Officers (CP Pers Type = 'O') might be 18A
-        if 'CP Pers Type' in processed_data.columns:
-            # Create synthetic MOS distribution based on personnel type
-            officers = (processed_data['CP Pers Type'] == 'O').sum()
-            enlisted = (processed_data['CP Pers Type'] == 'E').sum()
-            total = officers + enlisted
-            
-            if total > 0:
-                # Officers are 18A, distribute enlisted evenly among other MOS
-                mos_distribution = {
-                    '18A': officers / total,
-                    '18B': enlisted / total / 4,
-                    '18C': enlisted / total / 4,
-                    '18D': enlisted / total / 4,
-                    '18E': enlisted / total / 4
-                }
-                return mos_distribution
-        
-        # Default distribution if we can't extract from data
-        return {'18A': 0.2, '18B': 0.2, '18C': 0.2, '18D': 0.2, '18E': 0.2}
+    # If no MOS data is available or all values are null, return default distribution
+    if not mos_column or processed_data[mos_column].isna().all():
+        print("No MOS data found in the dataset. Using default distribution.")
+        return default_distribution
     
     # If we have an MOS column, calculate the distribution
     mos_counts = processed_data[mos_column].value_counts()
