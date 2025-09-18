@@ -849,13 +849,22 @@ def display_career_path_builder():
                 st.write(f"**OR Group {i+1}:**")
                 cols = st.columns([3, 1])
                 with cols[0]:
-                    # Get courses not already in this OR group
-                    available_or_courses = [c for c in all_courses if c not in group]
+                    # For OR groups, we need to include current group members in the options
+                    available_or_courses = [c for c in all_courses]
+                    
+                    # Make sure all current group members are in the options list
+                    for course in group:
+                        if course not in available_or_courses:
+                            available_or_courses.append(course)
+                    
+                    # Use only valid defaults (items that are in the options list)
+                    valid_defaults = [c for c in group if c in available_or_courses]
+                    
                     # Display and edit the group
                     updated_group = st.multiselect(
                         f"Select courses for OR Group {i+1}",
                         options=available_or_courses,
-                        default=group,
+                        default=valid_defaults,
                         key=f"or_group_{mos}_{i}"
                     )
                     or_groups[i] = updated_group
